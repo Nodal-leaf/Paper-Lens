@@ -108,7 +108,7 @@ def extract_text_from_pdf(pdf_path: Union[str, Path]) -> str:
         if page_text:
             text_pages.append(page_text)
 
-    return "\n".join(text_pages)
+    return "\n---PAGE_BREAK---\n".join(text_pages)
 
 
 def _clean_content_text(text: str) -> str:
@@ -268,9 +268,14 @@ def identify_sections(text: str) -> List[Dict[str, Any]]:
     sections: List[Dict[str, Any]] = []
     current_section: Optional[Dict[str, Any]] = None
     in_caption_block = False
+    current_page = 1
 
     for line in lines:
         raw_line = line.strip()
+        if raw_line == '---PAGE_BREAK---':
+            current_page += 1
+            continue
+
         if not raw_line:
             in_caption_block = False
             if current_section and current_section.get('content_lines') is not None:
@@ -334,6 +339,7 @@ def identify_sections(text: str) -> List[Dict[str, Any]]:
                 'title': title,
                 'number': number,
                 'level': level,
+                'page_number': current_page,
                 'content_lines': content_lines
             }
             continue
@@ -359,6 +365,7 @@ def identify_sections(text: str) -> List[Dict[str, Any]]:
                 'title': 'Preamble',
                 'number': None,
                 'level': 1,
+                'page_number': current_page,
                 'content_lines': [raw_line]
             }
 
@@ -370,6 +377,11 @@ def identify_sections(text: str) -> List[Dict[str, Any]]:
             current_section['content'] = _clean_content_text(raw_content)
         current_section.pop('content_lines', None)
         sections.append(current_section)
+
+    for i in range(1, len(sections)):
+        if sections[i].get('title', '').lower() == 'article title':
+            sections[i]['title'] = sections[i-1]['title']
+            sections[i]['number'] = sections[i-1].get('number')
 
     return sections
 
@@ -390,6 +402,7 @@ def build_hierarchy(flat_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         node = {
             'title': section['title'],
             'number': section.get('number'),
+            'page_number': section.get('page_number'),
             'content': section.get('content', ''),
             'subsections': []
         }
