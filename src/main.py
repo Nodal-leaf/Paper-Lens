@@ -1,24 +1,7 @@
 import argparse
-import sqlite3
 from pathlib import Path
 from parser.pdf_parser import parse_pdf_to_json
-
-def setup_database(db_path: Path):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title VARCHAR(255) NOT NULL,
-            number VARCHAR(50),
-            page_number INTEGER,
-            content TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            parent_id INTEGER
-        )
-    ''')
-    conn.commit()
-    return conn
+from database.repository import init_db, clear_sections, save_document_sections
 
 def main():
     parser = argparse.ArgumentParser(description="Parse research paper PDF and store output.")
@@ -52,27 +35,14 @@ def main():
     
     print(f"JSON output saved to {json_path}")
     
-    conn = setup_database(db_path)
-    cursor = conn.cursor()
-    
-    # Clear old sections if re-parsing
-    cursor.execute("DELETE FROM sections")
-    
-    for idx, sec in enumerate(sections):
-        cursor.execute('''
-            INSERT INTO sections (title, number, page_number, content, position, parent_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            sec.get('title', ''), 
-            sec.get('number'), 
-            sec.get('page_number'), 
-            sec.get('content', ''), 
-            idx, 
-            None # parent_id not computed currently by parse_pdf_to_json outputting flat list
-        ))
+    SessionLocal = init_db(db_path)
+    with SessionLocal() as session:
+        # Clear old sections if re-parsing
+        clear_sections(session)
         
-    conn.commit()
-    conn.close()
+        # Save new sections hierarchically
+        save_document_sections(session, sections)
+    
     print(f"Database saved to {db_path}")
 
 if __name__ == "__main__":
