@@ -1,5 +1,5 @@
 [project]
-name = "Paper Lens"
+name = "paper-lens"
 version = "0.1.0"
 description = "Smart AI jargon terms explainer for AI specific Research papers"
 readme = "README.md"
@@ -10,4 +10,6 @@ dependencies = [
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "pypdf>=3.17.0",
+    "groq>=0.9.0",
+    "python-dotenv>=1.0.0",
 ]

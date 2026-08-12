@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Runtime data — not for version control
+src/data/
+src/outputs/
+*.db
+
+# Secrets
+.env
