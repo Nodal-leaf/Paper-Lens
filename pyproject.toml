@@ -1,9 +1,13 @@
 [project]
-name = "ksks"
+name = "Paper Lens"
 version = "0.1.0"
-description = "Add your description here"
+description = "Smart AI jargon terms explainer for AI specific Research papers"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "sqlalchemy>=2.0.51",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.6",
+    "pypdf>=3.17.0",
 ]
