@@ -8,7 +8,7 @@ paper JSON. For each term it produces:
   (b) general_definition  — what the term means broadly in the AI/ML field
 
 Uses Groq LLM with the paper's own sentences as grounding context.
-Includes batching (batch_size=3), max_tokens=4096 allocation, automatic model fallback (llama-3.1-8b-instant),
+Includes batching (batch_size=3), max_tokens=4096 allocation, automatic model fallback,
 and retry logic to prevent Groq API rate limits and JSON validation truncation errors.
 """
 
@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
-GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+GROQ_PRIMARY_MODEL = "llama-3.1-8b-instant"
+GROQ_FALLBACK_MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """\
 You are an expert ML educator explaining technical AI/ML concepts to people who
@@ -111,7 +111,7 @@ class TermExplainerAgent:
                 if is_rate_limit_or_json_error:
                     if current_model != GROQ_FALLBACK_MODEL:
                         print(
-                            f"[TermExplainerAgent] Groq error ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
+                            f"[TermExplainerAgent] Groq notice ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
                         )
                         current_model = GROQ_FALLBACK_MODEL
                         self.model = GROQ_FALLBACK_MODEL
@@ -120,7 +120,7 @@ class TermExplainerAgent:
                     else:
                         wait_time = (attempt + 1) * 3.0
                         print(
-                            f"[TermExplainerAgent] Error on fallback model. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                            f"[TermExplainerAgent] Waiting {wait_time}s on fallback model (attempt {attempt + 1}/{max_retries})...."
                         )
                         time.sleep(wait_time)
                 else:

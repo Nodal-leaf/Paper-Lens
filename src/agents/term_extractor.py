@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
-GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+GROQ_PRIMARY_MODEL = "llama-3.1-8b-instant"
+GROQ_FALLBACK_MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """\
 You are an expert AI/ML researcher and technical writer. Read the research paper summary
