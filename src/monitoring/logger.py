@@ -61,12 +61,19 @@ class PipelineLogger:
         # Format as single-line JSON
         json_line = json.dumps(log_record, ensure_ascii=False)
 
-        # Print cleanly to stdout
+        # Relative path for user-friendly CLI display
+        try:
+            rel_log_path = str(self.log_file.relative_to(Path.cwd()))
+        except ValueError:
+            rel_log_path = "src/monitoring/logs/paper_lens_monitoring.jsonl"
+
+        # Print cleanly to stdout mentioning log storage location
         status_str = f" [ERROR: {errors}]" if errors else ""
         print(
             f"[MONITOR] [{log_record['timestamp']}] [{log_record['level']}] "
             f"Req: {req_id} | Agent: {log_record['agent_invoked']} | Endpoint: {endpoint} | "
-            f"Latency: {log_record['latency_ms']}ms | Tokens: {tokens.get('total_tokens', 0)}{status_str}"
+            f"Latency: {log_record['latency_ms']}ms | Tokens: {tokens.get('total_tokens', 0)}{status_str} | "
+            f"Log File: {rel_log_path}"
         )
 
         # Append to jsonl log file

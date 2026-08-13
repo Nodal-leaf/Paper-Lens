@@ -116,18 +116,18 @@ def main():
     print(f"      Database saved -> {db_path}")
     print(f"      extracted_terms stored on {len(all_titles)} section rows")
 
-    # -- Summary ---------------------------------------------------------------
     print(
         f"\n" +
-        f"+--------------------------------------------------+\n" +
-        f"|  Paper Lens - Complete                          |\n" +
-        f"+--------------------------------------------------+\n" +
+        f"+----------------------------------------------------------------------+\n" +
+        f"|  Paper Lens - Complete                                              |\n" +
+        f"+----------------------------------------------------------------------+\n" +
         f"|  PDF parsed      : {json_path}\n" +
         f"|  Terms extracted : {result['term_count']}\n" +
         f"|  Agent 1 output  : {out_dir}/extracted_terms_{pdf_name}.json\n" +
         f"|  Agent 2 output  : {out_dir}/explained_terms_{pdf_name}.json\n" +
         f"|  Database        : {db_path}\n" +
-        f"+--------------------------------------------------+"
+        f"|  Monitoring Log  : src/monitoring/logs/paper_lens_monitoring.jsonl\n" +
+        f"+----------------------------------------------------------------------+"
     )
 
 
