@@ -31,6 +31,7 @@ async def parse_pdf_endpoint(file: UploadFile = File(...)):
             level="ERROR",
             endpoint="/api/parse-pdf",
             agent_invoked="FastAPI",
+            cached=False,
             input_data={"filename": file.filename},
             latency_ms=(time.time() - t0) * 1000.0,
             errors=error_msg,
@@ -62,6 +63,7 @@ async def parse_pdf_endpoint(file: UploadFile = File(...)):
             level="ERROR" if error_msg else "INFO",
             endpoint="/api/parse-pdf",
             agent_invoked="PyMuPDFParser",
+            cached=False,
             input_data={"filename": file.filename},
             output_data={"top_level_sections_count": len(parsed_data)},
             latency_ms=latency_ms,
@@ -85,6 +87,7 @@ async def analyze_endpoint(
     t0 = time.time()
     req_id = f"req_{uuid.uuid4().hex[:10]}"
     error_msg = None
+    result = {}
 
     if not sections:
         error_msg = "sections list must not be empty"
@@ -92,6 +95,7 @@ async def analyze_endpoint(
             level="ERROR",
             endpoint="/api/analyze",
             agent_invoked="FastAPI",
+            cached=False,
             input_data={"sections_count": 0},
             latency_ms=(time.time() - t0) * 1000.0,
             errors=error_msg,
@@ -114,6 +118,7 @@ async def analyze_endpoint(
             level="ERROR" if error_msg else "INFO",
             endpoint="/api/analyze",
             agent_invoked="FastAPI_AnalyzeRoute",
+            cached=result.get("cached", False),
             input_data={"sections_count": len(sections), "pdf_name": pdf_name, "force_rerun": force_rerun},
             latency_ms=latency_ms,
             errors=error_msg,
@@ -133,6 +138,7 @@ async def parse_and_analyze_endpoint(
     t0 = time.time()
     req_id = f"req_{uuid.uuid4().hex[:10]}"
     error_msg = None
+    analysis = {}
 
     if not file.filename.endswith(".pdf"):
         error_msg = "Only PDF files are supported"
@@ -140,6 +146,7 @@ async def parse_and_analyze_endpoint(
             level="ERROR",
             endpoint="/api/parse-and-analyze",
             agent_invoked="FastAPI",
+            cached=False,
             input_data={"filename": file.filename},
             latency_ms=(time.time() - t0) * 1000.0,
             errors=error_msg,
@@ -178,6 +185,7 @@ async def parse_and_analyze_endpoint(
             level="ERROR" if error_msg else "INFO",
             endpoint="/api/parse-and-analyze",
             agent_invoked="FastAPI_ParseAndAnalyzeRoute",
+            cached=analysis.get("cached", False),
             input_data={"filename": file.filename, "force_rerun": force_rerun},
             latency_ms=latency_ms,
             errors=error_msg,

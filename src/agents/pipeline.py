@@ -7,7 +7,7 @@ Sequential pipeline:
   2. TermExplainerAgent  — explains each term in context + generally
 
 Includes smart result caching (prevents redundant LLM calls when a paper was already processed)
-and monitoring logger trace tracking (request_id, timestamp, latency, tokens, level, errors).
+and monitoring logger trace tracking (request_id, timestamp, latency, tokens, level, cached, errors).
 """
 
 import json
@@ -83,7 +83,8 @@ def run_pipeline(
                 level="INFO",
                 endpoint="run_pipeline.cached",
                 agent_invoked="CacheManager",
-                input_data={"pdf_name": pdf_name, "section_count": len(paper_sections), "cached": True},
+                cached=True,
+                input_data={"pdf_name": pdf_name, "section_count": len(paper_sections)},
                 output_data={"paper_title": paper_title, "term_count": len(glossary)},
                 latency_ms=latency_ms,
                 tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -127,7 +128,8 @@ def run_pipeline(
             level="ERROR" if error_msg else "INFO",
             endpoint="run_pipeline",
             agent_invoked="PipelineOrchestrator",
-            input_data={"pdf_name": pdf_name, "section_count": len(paper_sections), "cached": is_cached},
+            cached=is_cached,
+            input_data={"pdf_name": pdf_name, "section_count": len(paper_sections)},
             output_data={"paper_title": paper_title, "term_count": len(glossary)},
             latency_ms=latency_ms,
             errors=error_msg,

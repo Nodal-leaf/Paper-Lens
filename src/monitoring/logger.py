@@ -2,7 +2,7 @@
 src/monitoring/logger.py
 
 Structured JSON & File Logger for Paper Lens.
-Tracks request_id, timestamp, endpoint, input, output, latency_ms, tokens_used, agent_invoked, errors, and log level.
+Tracks request_id, timestamp, endpoint, input, output, latency_ms, tokens_used, agent_invoked, cached status, errors, and log level.
 Logs to both stdout and rotating JSON line logs in src/monitoring/logs/paper_lens_monitoring.jsonl.
 """
 
@@ -30,6 +30,7 @@ class PipelineLogger:
         level: str = "INFO",
         endpoint: str = "pipeline",
         agent_invoked: Optional[str] = None,
+        cached: bool = False,
         input_data: Optional[Any] = None,
         output_data: Optional[Any] = None,
         latency_ms: Optional[float] = None,
@@ -51,6 +52,7 @@ class PipelineLogger:
             "level": level.upper(),
             "endpoint": endpoint,
             "agent_invoked": agent_invoked or "System",
+            "cached": cached,
             "input": self._sanitize_payload(input_data),
             "output": self._sanitize_payload(output_data),
             "latency_ms": round(latency_ms, 2) if latency_ms is not None else 0.0,
@@ -67,11 +69,12 @@ class PipelineLogger:
         except ValueError:
             rel_log_path = "src/monitoring/logs/paper_lens_monitoring.jsonl"
 
-        # Print cleanly to stdout mentioning log storage location
+        # Print cleanly to stdout mentioning log storage location and cached status
         status_str = f" [ERROR: {errors}]" if errors else ""
+        cache_str = " (CACHED)" if cached else ""
         print(
             f"[MONITOR] [{log_record['timestamp']}] [{log_record['level']}] "
-            f"Req: {req_id} | Agent: {log_record['agent_invoked']} | Endpoint: {endpoint} | "
+            f"Req: {req_id} | Agent: {log_record['agent_invoked']} | Endpoint: {endpoint}{cache_str} | "
             f"Latency: {log_record['latency_ms']}ms | Tokens: {tokens.get('total_tokens', 0)}{status_str} | "
             f"Log File: {rel_log_path}"
         )
