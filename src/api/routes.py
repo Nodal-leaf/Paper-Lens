@@ -12,6 +12,8 @@ from src.monitoring.logger import monitor_logger
 
 router = APIRouter()
 
+LOG_FILE_PATH = "src/monitoring/logs/paper_lens_monitoring.jsonl"
+
 
 @router.post("/parse-pdf")
 async def parse_pdf_endpoint(file: UploadFile = File(...)):
@@ -43,7 +45,12 @@ async def parse_pdf_endpoint(file: UploadFile = File(...)):
             temp_file.write(content)
 
         parsed_data = parse_pdf_to_json(Path(temp_path))
-        return {"request_id": req_id, "filename": file.filename, "data": parsed_data}
+        return {
+            "request_id": req_id,
+            "filename": file.filename,
+            "monitoring_log": LOG_FILE_PATH,
+            "data": parsed_data,
+        }
     except Exception as e:
         error_msg = str(e)
         raise HTTPException(status_code=500, detail=error_msg)
@@ -89,6 +96,7 @@ async def analyze_endpoint(sections: List[Dict[str, Any]]):
         raise HTTPException(status_code=400, detail=error_msg)
     try:
         result = run_pipeline(sections, request_id=req_id)
+        result["monitoring_log"] = LOG_FILE_PATH
         return result
     except EnvironmentError as e:
         error_msg = str(e)
@@ -145,6 +153,7 @@ async def parse_and_analyze_endpoint(file: UploadFile = File(...)):
         return {
             "request_id": req_id,
             "filename": file.filename,
+            "monitoring_log": LOG_FILE_PATH,
             "sections": parsed_data,
             **analysis,
         }
