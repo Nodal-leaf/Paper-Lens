@@ -10,6 +10,7 @@ is excluded unless the paper introduces a novel variant.
 
 import json
 import os
+import time
 from typing import Any, Dict, List
 
 from groq import Groq
@@ -30,22 +31,29 @@ INCLUDE terms like:
 - Paper-specific concepts (e.g. feature mimicking, mimic loss, visible token supervision)
 - Named training strategies or objectives (e.g. masked image modeling, contrastive pre-training)
 - Key benchmarks or datasets referenced (e.g. ImageNet-1K, COCO)
+- Specialized terms whose meaning or usage is particularly important in this paper
 
-EXCLUDE generic terms that appear in every ML paper:
+EXCLUDE generic terms that appear in most ML papers:
 - loss, training, model, layer, batch, epoch, gradient, dataset, accuracy,
   inference, parameter, weight, output, input, feature, vector, matrix,
   function, network, performance, result, experiment
 
 For every term you identify, also assign a jargon_score from 1 to 10:
-- 10 = coined or redefined in this specific paper (e.g. "MR-MAE", "mimic loss")
+- 10 = coined, introduced, or substantially redefined in this specific paper
 - 7-9 = well-known AI/ML jargon that is central to this paper's contribution
-         (e.g. "Masked Autoencoders", "contrastive learning", "Vision Transformer")
-- 4-6 = technical term used as supporting context, not the paper's core novelty
-         (e.g. "ImageNet-1K", "fine-tuning", "COCO")
-- 1-3 = borderline — could appear in general tech writing, barely paper-specific
-         (e.g. "representation", "pre-training", "downstream task")
+- 4-6 = technical term used as supporting context, not central to the contribution
+- 1-3 = borderline — could appear in general technical writing, barely paper-specific
 
-Return ONLY a valid JSON array. Each element must be an object with:
+For occurrences:
+- Include the exact sentences from the paper where the term appears.
+- Prefer sentences that define, introduce, explain, or meaningfully use the term.
+- Do not paraphrase or fabricate sentences.
+- Include only the most useful occurrences rather than every occurrence.
+
+Prioritize terms that a technically competent ML reader would likely need to
+look up in order to understand this specific paper.
+
+Return ONLY a valid JSON array or object with key "terms". Each element must be an object with:
 {
   "term": "<the term as it appears in the paper>",
   "jargon_score": <integer 1-10>,
@@ -82,6 +90,36 @@ class TermExtractorAgent:
         self.client = Groq(api_key=api_key)
         self.model = model
 
+    def _call_llm_with_retry(
+        self,
+        messages: List[Dict[str, str]],
+        max_retries: int = 4,
+    ) -> str:
+        """Helper to call Groq with exponential backoff on rate limits."""
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.1,
+                    response_format={"type": "json_object"},
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = any(
+                    k in err_str
+                    for k in ["429", "rate limit", "tpm", "rpm", "rate_limit_exceeded"]
+                )
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 4.0
+                    print(
+                        f"[TermExtractorAgent] Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise e
+
     def run(self, paper_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Extracts domain-specific terms from the paper.
@@ -100,17 +138,11 @@ class TermExtractorAgent:
             f"{flat_text}"
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        raw = self._call_llm_with_retry([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ])
 
-        raw = response.choices[0].message.content
         parsed = json.loads(raw)
 
         # The model may return {"terms": [...]} or just [...]

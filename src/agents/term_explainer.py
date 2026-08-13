@@ -8,10 +8,12 @@ paper JSON. For each term it produces:
   (b) general_definition  — what the term means broadly in the AI/ML field
 
 Uses Groq LLM with the paper's own sentences as grounding context.
+Includes batching and automatic retry logic to prevent Groq API rate limits.
 """
 
 import json
 import os
+import time
 from typing import Any, Dict, List
 
 from groq import Groq
@@ -22,21 +24,36 @@ load_dotenv()
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """\
-You are an expert ML educator explaining technical AI/ML concepts to a graduate
-student audience. For each term you receive:
+You are an expert ML educator explaining technical AI/ML concepts to people who
+end up opening many tabs on their browser while reading a research paper because
+of unfamiliar terms. For each term you receive:
 
 1. context_definition: Explain what this term means SPECIFICALLY within this
-   paper. Use the paper's own wording and sentences to ground your explanation.
-   Be precise about how the authors use or extend this concept.
+paper in detail. Use the paper's own terminology, wording, and relevant sentences
+to ground your explanation. Be precise about how the authors use the term, its
+role in the paper, and how it relates to their method, architecture, objective,
+or contribution. If the authors use the term in a way that differs from its
+standard meaning, explicitly explain that distinction. Do not invent or assume
+paper-specific details that are not supported by the paper.
 
 2. general_definition: Explain what this term means BROADLY in the AI/ML field,
-   independent of this specific paper. Write a clear, accessible definition.
+independent of this specific paper. Give the standard technical meaning in a
+clear, accessible, and concise way. Focus on the core intuition, purpose, and
+how the concept is generally used in AI/ML.
 
-Return ONLY a valid JSON object in this exact shape:
+The key distinction is:
+- context_definition = What does this term mean HERE, in this paper?
+- general_definition = What does this term normally mean in AI/ML?
+
+Return ONLY a valid JSON object with a single key "explained_terms" containing a list of objects in this exact shape:
 {
-  "term": "<term>",
-  "context_definition": "<explanation within the paper>",
-  "general_definition": "<broad field definition>"
+  "explained_terms": [
+    {
+      "term": "<term>",
+      "context_definition": "<explanation within the paper>",
+      "general_definition": "<broad field definition>"
+    }
+  ]
 }
 
 No extra keys, no explanation outside the JSON.
@@ -46,7 +63,7 @@ No extra keys, no explanation outside the JSON.
 class TermExplainerAgent:
     """Agent 2: produces in-context and general definitions for extracted terms."""
 
-    def __init__(self, model: str = GROQ_MODEL):
+    def __init__(self, model: str = GROQ_MODEL, batch_size: int = 5):
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise EnvironmentError(
@@ -54,36 +71,75 @@ class TermExplainerAgent:
             )
         self.client = Groq(api_key=api_key)
         self.model = model
+        self.batch_size = batch_size
 
-    def _explain_term(
+    def _call_llm_with_retry(
         self,
-        term: str,
-        occurrences: List[str],
-        paper_title: str,
-    ) -> Dict[str, Any]:
-        """Calls LLM to explain a single term."""
-        occurrence_block = "\n".join(
-            f"- {s}" for s in occurrences[:5]  # cap to 5 sentences to keep prompt lean
-        )
-        user_message = (
-            f"Paper title: {paper_title}\n\n"
-            f"Term: {term}\n\n"
-            f"Sentences from the paper where this term appears:\n{occurrence_block}\n\n"
-            "Now produce the two definitions."
-        )
+        messages: List[Dict[str, str]],
+        max_retries: int = 4,
+    ) -> str:
+        """Helper to call Groq with exponential backoff on rate limits."""
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = any(
+                    k in err_str
+                    for k in ["429", "rate limit", "tpm", "rpm", "rate_limit_exceeded"]
+                )
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 3.0
+                    print(
+                        f"[TermExplainerAgent] Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise e
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+    def _explain_batch(
+        self,
+        terms_batch: List[Dict[str, Any]],
+        paper_title: str,
+    ) -> List[Dict[str, Any]]:
+        """Calls LLM to explain a batch of terms in a single request."""
+        batch_prompt_parts = [f"Paper title: {paper_title}\n"]
+        for idx, item in enumerate(terms_batch, start=1):
+            t = item.get("term", "")
+            occs = item.get("occurrences", [])
+            occ_str = "\n".join(f"  - {s}" for s in occs[:4])
+            batch_prompt_parts.append(f"Term {idx}: {t}\nOccurrences:\n{occ_str}\n")
+
+        batch_prompt_parts.append(
+            "Now produce the two definitions for each of the terms listed above."
+        )
+        user_message = "\n".join(batch_prompt_parts)
+
+        raw = self._call_llm_with_retry(
+            [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
+            ]
         )
 
-        raw = response.choices[0].message.content
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            if "explained_terms" in parsed and isinstance(
+                parsed["explained_terms"], list
+            ):
+                return parsed["explained_terms"]
+            for v in parsed.values():
+                if isinstance(v, list):
+                    return v
+        elif isinstance(parsed, list):
+            return parsed
+        return []
 
     def run(
         self,
@@ -91,7 +147,7 @@ class TermExplainerAgent:
         paper_sections: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """
-        Explains every extracted term.
+        Explains every extracted term using batched requests to avoid Groq rate limits.
 
         Args:
             extracted_terms: Output from TermExtractorAgent.run().
@@ -100,25 +156,57 @@ class TermExplainerAgent:
         Returns:
             List of dicts: [{term, jargon_score, context_definition, general_definition, occurrences}, ...]
         """
-        # Extract paper title from the Preamble section
         paper_title = "the paper"
         for sec in paper_sections:
             if sec.get("title") == "Preamble" and sec.get("content"):
                 paper_title = sec["content"]
                 break
 
-        results = []
-        for item in extracted_terms:
-            term = item.get("term", "")
-            occurrences = item.get("occurrences", [])
-            if not term:
-                continue
+        terms_list = [item for item in extracted_terms if item.get("term")]
+        results_map = {}
 
-            explained = self._explain_term(term, occurrences, paper_title)
+        # Process terms in batches
+        total_batches = (len(terms_list) + self.batch_size - 1) // max(
+            1, self.batch_size
+        )
+        for i in range(0, len(terms_list), self.batch_size):
+            batch = terms_list[i : i + self.batch_size]
+            current_batch_num = (i // self.batch_size) + 1
+            print(
+                f"[TermExplainerAgent] Explaining batch {current_batch_num}/{total_batches} ({len(batch)} terms)..."
+            )
 
-            # Carry over fields from Agent 1 output
-            explained["jargon_score"] = item.get("jargon_score")
-            explained["occurrences"] = occurrences
-            results.append(explained)
+            try:
+                explained_batch = self._explain_batch(batch, paper_title)
+                for exp in explained_batch:
+                    t_name = exp.get("term", "")
+                    if t_name:
+                        results_map[t_name.lower()] = exp
+            except Exception as e:
+                print(f"[TermExplainerAgent] Error during batch processing: {e}")
 
-        return results
+            time.sleep(0.4)
+
+        # Assemble final results list maintaining original order and metadata
+        final_results = []
+        for item in terms_list:
+            t = item.get("term", "")
+            t_lower = t.lower()
+            exp = results_map.get(t_lower, {})
+
+            final_results.append(
+                {
+                    "term": t,
+                    "jargon_score": item.get("jargon_score", 5),
+                    "context_definition": exp.get(
+                        "context_definition",
+                        "Paper-specific context definition unavailable.",
+                    ),
+                    "general_definition": exp.get(
+                        "general_definition", "General definition unavailable."
+                    ),
+                    "occurrences": item.get("occurrences", []),
+                }
+            )
+
+        return final_results
