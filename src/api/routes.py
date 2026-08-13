@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from typing import Any, Dict, List
 import tempfile
 import os
@@ -71,9 +71,13 @@ async def parse_pdf_endpoint(file: UploadFile = File(...)):
 
 
 @router.post("/analyze")
-async def analyze_endpoint(sections: List[Dict[str, Any]]):
+async def analyze_endpoint(
+    sections: List[Dict[str, Any]],
+    pdf_name: str = Query("paper", help="Name of PDF file for output caching"),
+    force_rerun: bool = Query(False, help="Force re-run LLM pipeline bypassing cache"),
+):
     """
-    Runs the two-agent pipeline on a parsed paper JSON.
+    Runs the two-agent pipeline on a parsed paper JSON with smart output caching.
 
     Accepts the output of /api/parse-pdf (the `data` array) as the request body.
     Returns a glossary of AI/ML terms with in-context and general definitions.
@@ -95,7 +99,7 @@ async def analyze_endpoint(sections: List[Dict[str, Any]]):
         )
         raise HTTPException(status_code=400, detail=error_msg)
     try:
-        result = run_pipeline(sections, request_id=req_id)
+        result = run_pipeline(sections, pdf_name=pdf_name, request_id=req_id, force_rerun=force_rerun)
         result["monitoring_log"] = LOG_FILE_PATH
         return result
     except EnvironmentError as e:
@@ -110,7 +114,7 @@ async def analyze_endpoint(sections: List[Dict[str, Any]]):
             level="ERROR" if error_msg else "INFO",
             endpoint="/api/analyze",
             agent_invoked="FastAPI_AnalyzeRoute",
-            input_data={"sections_count": len(sections)},
+            input_data={"sections_count": len(sections), "pdf_name": pdf_name, "force_rerun": force_rerun},
             latency_ms=latency_ms,
             errors=error_msg,
             request_id=req_id,
@@ -118,9 +122,12 @@ async def analyze_endpoint(sections: List[Dict[str, Any]]):
 
 
 @router.post("/parse-and-analyze")
-async def parse_and_analyze_endpoint(file: UploadFile = File(...)):
+async def parse_and_analyze_endpoint(
+    file: UploadFile = File(...),
+    force_rerun: bool = Query(False, help="Force re-run LLM pipeline bypassing cache"),
+):
     """
-    One-shot endpoint: parses a PDF and immediately runs the agentic pipeline.
+    One-shot endpoint: parses a PDF and immediately runs the agentic pipeline with smart caching.
     Returns structured sections + full AI/ML glossary in a single response.
     """
     t0 = time.time()
@@ -148,7 +155,7 @@ async def parse_and_analyze_endpoint(file: UploadFile = File(...)):
 
         parsed_data = parse_pdf_to_json(Path(temp_path))
         pdf_name = Path(file.filename).stem
-        analysis = run_pipeline(parsed_data, pdf_name=pdf_name, request_id=req_id)
+        analysis = run_pipeline(parsed_data, pdf_name=pdf_name, request_id=req_id, force_rerun=force_rerun)
 
         return {
             "request_id": req_id,
@@ -171,7 +178,7 @@ async def parse_and_analyze_endpoint(file: UploadFile = File(...)):
             level="ERROR" if error_msg else "INFO",
             endpoint="/api/parse-and-analyze",
             agent_invoked="FastAPI_ParseAndAnalyzeRoute",
-            input_data={"filename": file.filename},
+            input_data={"filename": file.filename, "force_rerun": force_rerun},
             latency_ms=latency_ms,
             errors=error_msg,
             request_id=req_id,
