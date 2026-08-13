@@ -4,8 +4,8 @@ import tempfile
 import os
 from pathlib import Path
 
-from parser.pdf_parser import parse_pdf_to_json
-from agents.pipeline import run_pipeline
+from src.parser.pdf_parser import parse_pdf_to_json
+from src.agents.pipeline import run_pipeline
 
 router = APIRouter()
 

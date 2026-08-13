@@ -20,8 +20,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agents.term_extractor import TermExtractorAgent
-from agents.term_explainer import TermExplainerAgent
+from src.agents.term_extractor import TermExtractorAgent
+from src.agents.term_explainer import TermExplainerAgent
 
 # Resolve the outputs directory relative to this file's location:
 # src/agents/../outputs → src/outputs
