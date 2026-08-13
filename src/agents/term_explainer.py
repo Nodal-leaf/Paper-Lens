@@ -8,7 +8,8 @@ paper JSON. For each term it produces:
   (b) general_definition  — what the term means broadly in the AI/ML field
 
 Uses Groq LLM with the paper's own sentences as grounding context.
-Includes batching and automatic retry logic to prevent Groq API rate limits.
+Includes batching (batch_size=3), max_tokens=4096 allocation, automatic model fallback (llama-3.1-8b-instant),
+and retry logic to prevent Groq API rate limits and JSON validation truncation errors.
 """
 
 import json
@@ -21,7 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """\
 You are an expert ML educator explaining technical AI/ML concepts to people who
@@ -63,7 +65,7 @@ No extra keys, no explanation outside the JSON.
 class TermExplainerAgent:
     """Agent 2: produces in-context and general definitions for extracted terms."""
 
-    def __init__(self, model: str = GROQ_MODEL, batch_size: int = 5):
+    def __init__(self, model: str = GROQ_PRIMARY_MODEL, batch_size: int = 3):
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise EnvironmentError(
@@ -78,30 +80,52 @@ class TermExplainerAgent:
         messages: List[Dict[str, str]],
         max_retries: int = 4,
     ) -> str:
-        """Helper to call Groq with exponential backoff on rate limits."""
+        """Helper to call Groq with exponential backoff and automatic model fallback."""
+        current_model = self.model
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
+                    model=current_model,
                     messages=messages,
                     temperature=0.2,
+                    max_tokens=4096,
                     response_format={"type": "json_object"},
                 )
                 return response.choices[0].message.content
             except Exception as e:
                 err_str = str(e).lower()
-                is_rate_limit = any(
+                is_rate_limit_or_json_error = any(
                     k in err_str
-                    for k in ["429", "rate limit", "tpm", "rpm", "rate_limit_exceeded"]
+                    for k in [
+                        "429",
+                        "rate limit",
+                        "tpm",
+                        "rpm",
+                        "tpd",
+                        "tokens per day",
+                        "rate_limit_exceeded",
+                        "json_validate_failed",
+                        "max completion tokens reached",
+                    ]
                 )
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 3.0
-                    print(
-                        f"[TermExplainerAgent] Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
-                    )
-                    time.sleep(wait_time)
+                if is_rate_limit_or_json_error:
+                    if current_model != GROQ_FALLBACK_MODEL:
+                        print(
+                            f"[TermExplainerAgent] Groq error ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
+                        )
+                        current_model = GROQ_FALLBACK_MODEL
+                        self.model = GROQ_FALLBACK_MODEL
+                        time.sleep(1.0)
+                        continue
+                    else:
+                        wait_time = (attempt + 1) * 3.0
+                        print(
+                            f"[TermExplainerAgent] Error on fallback model. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(wait_time)
                 else:
                     raise e
+        raise RuntimeError("TermExplainerAgent exceeded maximum retry attempts")
 
     def _explain_batch(
         self,
@@ -113,7 +137,7 @@ class TermExplainerAgent:
         for idx, item in enumerate(terms_batch, start=1):
             t = item.get("term", "")
             occs = item.get("occurrences", [])
-            occ_str = "\n".join(f"  - {s}" for s in occs[:4])
+            occ_str = "\n".join(f"  - {s}" for s in occs[:3])
             batch_prompt_parts.append(f"Term {idx}: {t}\nOccurrences:\n{occ_str}\n")
 
         batch_prompt_parts.append(

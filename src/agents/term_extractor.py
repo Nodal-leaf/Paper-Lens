@@ -6,6 +6,9 @@ Receives the flattened text of a parsed research paper and uses Groq LLM
 to extract domain-specific AI/ML terms that are significant to THIS paper's
 specific contribution. Generic ML vocabulary (loss, training, model, layer)
 is excluded unless the paper introduces a novel variant.
+
+Includes input text pruning, max_tokens=4096 allocation, and automatic model
+fallback to llama-3.1-8b-instant to prevent JSON truncation and rate limits.
 """
 
 import json
@@ -18,7 +21,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """\
 You are an expert AI/ML researcher and technical writer. Your job is to read a
@@ -45,43 +49,56 @@ For every term you identify, also assign a jargon_score from 1 to 10:
 - 1-3 = borderline — could appear in general technical writing, barely paper-specific
 
 For occurrences:
-- Include the exact sentences from the paper where the term appears.
+- Include at most 2 exact sentences from the paper where the term appears.
 - Prefer sentences that define, introduce, explain, or meaningfully use the term.
-- Do not paraphrase or fabricate sentences.
-- Include only the most useful occurrences rather than every occurrence.
+- Do not paraphrase or fabricate sentences. Keep occurrences concise.
 
-Prioritize terms that a technically competent ML reader would likely need to
+Prioritize top 15-20 key terms that a technically competent ML reader would likely need to
 look up in order to understand this specific paper.
 
-Return ONLY a valid JSON array or object with key "terms". Each element must be an object with:
+Return ONLY a valid JSON object in this exact shape:
 {
-  "term": "<the term as it appears in the paper>",
-  "jargon_score": <integer 1-10>,
-  "occurrences": ["<sentence 1 where term appears>", "<sentence 2 ...>"]
+  "terms": [
+    {
+      "term": "<the term as it appears in the paper>",
+      "jargon_score": <integer 1-10>,
+      "occurrences": ["<sentence 1>", "<sentence 2>"]
+    }
+  ]
 }
 
-Do not include any explanation outside the JSON array.
+Do not include any explanation outside the JSON object.
 """
 
 
-def flatten_sections(sections: List[Dict[str, Any]], depth: int = 0) -> str:
-    """Recursively flattens the nested section JSON into plain text."""
+def prune_paper_text(sections: List[Dict[str, Any]], max_chars: int = 24000) -> str:
+    """Flattens section JSON into plain text, omitting references and capping max characters."""
     parts = []
     for sec in sections:
         title = sec.get("title", "")
+        title_lower = title.lower()
+        # Omit reference sections to save token budget
+        if any(skip in title_lower for skip in ["reference", "bibliography", "acknowledg"]):
+            continue
         content = sec.get("content", "").strip()
         if content:
             parts.append(f"[{title}]\n{content}")
         subsections = sec.get("subsections", [])
         if subsections:
-            parts.append(flatten_sections(subsections, depth + 1))
-    return "\n\n".join(parts)
+            sub_text = prune_paper_text(subsections, max_chars=max_chars)
+            if sub_text:
+                parts.append(sub_text)
+
+    full_text = "\n\n".join(parts)
+    if len(full_text) > max_chars:
+        full_text = full_text[:max_chars] + "\n\n[... Remaining paper sections omitted for token optimization ...]"
+    return full_text
 
 
 class TermExtractorAgent:
     """Agent 1: extracts AI/ML-specific terms from parsed paper JSON."""
 
-    def __init__(self, model: str = GROQ_MODEL):
+    def __init__(self, model: str = GROQ_PRIMARY_MODEL):
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise EnvironmentError(
@@ -95,30 +112,52 @@ class TermExtractorAgent:
         messages: List[Dict[str, str]],
         max_retries: int = 4,
     ) -> str:
-        """Helper to call Groq with exponential backoff on rate limits."""
+        """Helper to call Groq with exponential backoff and automatic model fallback."""
+        current_model = self.model
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
+                    model=current_model,
                     messages=messages,
                     temperature=0.1,
+                    max_tokens=4096,
                     response_format={"type": "json_object"},
                 )
                 return response.choices[0].message.content
             except Exception as e:
                 err_str = str(e).lower()
-                is_rate_limit = any(
+                is_rate_limit_or_json_error = any(
                     k in err_str
-                    for k in ["429", "rate limit", "tpm", "rpm", "rate_limit_exceeded"]
+                    for k in [
+                        "429",
+                        "rate limit",
+                        "tpm",
+                        "rpm",
+                        "tpd",
+                        "tokens per day",
+                        "rate_limit_exceeded",
+                        "json_validate_failed",
+                        "max completion tokens reached",
+                    ]
                 )
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 4.0
-                    print(
-                        f"[TermExtractorAgent] Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
-                    )
-                    time.sleep(wait_time)
+                if is_rate_limit_or_json_error:
+                    if current_model != GROQ_FALLBACK_MODEL:
+                        print(
+                            f"[TermExtractorAgent] Groq error ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
+                        )
+                        current_model = GROQ_FALLBACK_MODEL
+                        self.model = GROQ_FALLBACK_MODEL
+                        time.sleep(1.0)
+                        continue
+                    else:
+                        wait_time = (attempt + 1) * 3.0
+                        print(
+                            f"[TermExtractorAgent] Error on fallback model. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(wait_time)
                 else:
                     raise e
+        raise RuntimeError("TermExtractorAgent exceeded maximum retry attempts")
 
     def run(self, paper_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -130,11 +169,11 @@ class TermExtractorAgent:
         Returns:
             List of dicts: [{"term": str, "occurrences": [str, ...]}, ...]
         """
-        flat_text = flatten_sections(paper_sections)
+        flat_text = prune_paper_text(paper_sections)
 
         user_message = (
-            "Here is the full text of the research paper. "
-            "Extract all domain-specific AI/ML terms.\n\n"
+            "Here is the text of the research paper. "
+            "Extract top domain-specific AI/ML terms.\n\n"
             f"{flat_text}"
         )
 
