@@ -2,17 +2,14 @@
 
 Agent 1 — AI/ML Term Extractor.
 
-Receives the flattened text of a parsed research paper and uses Groq LLM
-to extract domain-specific AI/ML terms that are significant to THIS paper's
-specific contribution. Generic ML vocabulary (loss, training, model, layer)
-is excluded unless the paper introduces a novel variant.
-
-Includes input text pruning, max_tokens=4096 allocation, and automatic model
-fallback to llama-3.1-8b-instant to prevent JSON truncation and rate limits.
+Extracts domain-specific AI/ML terms from a research paper using a lightweight,
+token-optimized summary input. Sentences containing occurrences are matched
+directly in Python to eliminate completion token bloat and prevent Groq API rate limits.
 """
 
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List
 
@@ -25,9 +22,8 @@ GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
 GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """\
-You are an expert AI/ML researcher and technical writer. Your job is to read a
-research paper and extract domain-specific terminology that is significant to
-THIS paper's specific contribution — not generic ML vocabulary.
+You are an expert AI/ML researcher and technical writer. Read the research paper summary
+and extract domain-specific terminology that is significant to THIS paper's specific contribution.
 
 INCLUDE terms like:
 - Novel methods or frameworks introduced or used (e.g. MR-MAE, BEiT, DINO, CLIP)
@@ -42,57 +38,92 @@ EXCLUDE generic terms that appear in most ML papers:
   inference, parameter, weight, output, input, feature, vector, matrix,
   function, network, performance, result, experiment
 
-For every term you identify, also assign a jargon_score from 1 to 10:
+For every term you identify, assign a jargon_score from 1 to 10:
 - 10 = coined, introduced, or substantially redefined in this specific paper
-- 7-9 = well-known AI/ML jargon that is central to this paper's contribution
-- 4-6 = technical term used as supporting context, not central to the contribution
-- 1-3 = borderline — could appear in general technical writing, barely paper-specific
+- 7-9 = well-known AI/ML jargon central to this paper's contribution
+- 4-6 = technical term used as supporting context
+- 1-3 = borderline paper-specific term
 
-For occurrences:
-- Include at most 2 exact sentences from the paper where the term appears.
-- Prefer sentences that define, introduce, explain, or meaningfully use the term.
-- Do not paraphrase or fabricate sentences. Keep occurrences concise.
-
-Prioritize top 15-20 key terms that a technically competent ML reader would likely need to
-look up in order to understand this specific paper.
+Limit output to top 12-15 most important terms.
 
 Return ONLY a valid JSON object in this exact shape:
 {
   "terms": [
     {
-      "term": "<the term as it appears in the paper>",
-      "jargon_score": <integer 1-10>,
-      "occurrences": ["<sentence 1>", "<sentence 2>"]
+      "term": "<term as it appears in paper>",
+      "jargon_score": <integer 1-10>
     }
   ]
 }
 
-Do not include any explanation outside the JSON object.
+No extra keys, no explanation outside the JSON object.
 """
 
 
-def prune_paper_text(sections: List[Dict[str, Any]], max_chars: int = 24000) -> str:
-    """Flattens section JSON into plain text, omitting references and capping max characters."""
+def get_paper_summary_for_extraction(sections: List[Dict[str, Any]], max_chars: int = 5500) -> str:
+    """Extracts high-signal sections keeping total input under max_chars for token efficiency."""
     parts = []
     for sec in sections:
         title = sec.get("title", "")
         title_lower = title.lower()
-        # Omit reference sections to save token budget
         if any(skip in title_lower for skip in ["reference", "bibliography", "acknowledg"]):
             continue
-        content = sec.get("content", "").strip()
-        if content:
-            parts.append(f"[{title}]\n{content}")
-        subsections = sec.get("subsections", [])
-        if subsections:
-            sub_text = prune_paper_text(subsections, max_chars=max_chars)
-            if sub_text:
-                parts.append(sub_text)
 
-    full_text = "\n\n".join(parts)
-    if len(full_text) > max_chars:
-        full_text = full_text[:max_chars] + "\n\n[... Remaining paper sections omitted for token optimization ...]"
-    return full_text
+        content = sec.get("content", "").strip()
+        is_priority = any(
+            k in title_lower
+            for k in ["preamble", "abstract", "intro", "overview", "method", "approach", "architecture"]
+        )
+
+        if is_priority and content:
+            parts.append(f"[{title}]\n{content[:1200]}")
+        elif title:
+            excerpt = content[:250] if content else ""
+            parts.append(f"[{title}]\n{excerpt}")
+
+        for sub in sec.get("subsections", []):
+            sub_title = sub.get("title", "")
+            sub_content = sub.get("content", "").strip()
+            if sub_title:
+                parts.append(f"  Subsection: {sub_title} - {sub_content[:150]}")
+
+    full_summary = "\n\n".join(parts)
+    if len(full_summary) > max_chars:
+        full_summary = full_summary[:max_chars]
+    return full_summary
+
+
+def find_occurrences_in_sections(term: str, sections: List[Dict[str, Any]], max_occurrences: int = 3) -> List[str]:
+    """Finds exact sentences in paper sections where the given term appears."""
+    occurrences = []
+    if not term or len(term.strip()) < 2:
+        return occurrences
+
+    term_pattern = re.compile(rf'\b{re.escape(term)}\b', re.IGNORECASE)
+
+    def extract_from_text(text: str):
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        for sent in sentences:
+            sent_clean = sent.strip().replace('\n', ' ')
+            if len(sent_clean) > 15 and term_pattern.search(sent_clean):
+                if sent_clean not in occurrences:
+                    occurrences.append(sent_clean)
+                if len(occurrences) >= max_occurrences:
+                    return
+
+    def traverse(sec_list):
+        for sec in sec_list:
+            if len(occurrences) >= max_occurrences:
+                break
+            content = sec.get("content", "")
+            if content:
+                extract_from_text(content)
+            subsections = sec.get("subsections", [])
+            if subsections:
+                traverse(subsections)
+
+    traverse(sections)
+    return occurrences
 
 
 class TermExtractorAgent:
@@ -120,7 +151,7 @@ class TermExtractorAgent:
                     model=current_model,
                     messages=messages,
                     temperature=0.1,
-                    max_tokens=4096,
+                    max_tokens=1024,
                     response_format={"type": "json_object"},
                 )
                 return response.choices[0].message.content
@@ -137,13 +168,12 @@ class TermExtractorAgent:
                         "tokens per day",
                         "rate_limit_exceeded",
                         "json_validate_failed",
-                        "max completion tokens reached",
                     ]
                 )
                 if is_rate_limit_or_json_error:
                     if current_model != GROQ_FALLBACK_MODEL:
                         print(
-                            f"[TermExtractorAgent] Groq error ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
+                            f"[TermExtractorAgent] Groq notice ({err_str[:60]}...) on '{current_model}'. Switching to fallback model '{GROQ_FALLBACK_MODEL}'..."
                         )
                         current_model = GROQ_FALLBACK_MODEL
                         self.model = GROQ_FALLBACK_MODEL
@@ -152,7 +182,7 @@ class TermExtractorAgent:
                     else:
                         wait_time = (attempt + 1) * 3.0
                         print(
-                            f"[TermExtractorAgent] Error on fallback model. Waiting {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                            f"[TermExtractorAgent] Waiting {wait_time}s on fallback model (attempt {attempt + 1}/{max_retries})..."
                         )
                         time.sleep(wait_time)
                 else:
@@ -161,20 +191,20 @@ class TermExtractorAgent:
 
     def run(self, paper_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Extracts domain-specific terms from the paper.
+        Extracts domain-specific terms from the paper and attaches matched occurrences.
 
         Args:
             paper_sections: Structured section list from parse_pdf_to_json().
 
         Returns:
-            List of dicts: [{"term": str, "occurrences": [str, ...]}, ...]
+            List of dicts: [{"term": str, "jargon_score": int, "occurrences": [str, ...]}, ...]
         """
-        flat_text = prune_paper_text(paper_sections)
+        paper_summary = get_paper_summary_for_extraction(paper_sections)
 
         user_message = (
-            "Here is the text of the research paper. "
-            "Extract top domain-specific AI/ML terms.\n\n"
-            f"{flat_text}"
+            "Here is the research paper summary. "
+            "Extract the top domain-specific AI/ML terms.\n\n"
+            f"{paper_summary}"
         )
 
         raw = self._call_llm_with_retry([
@@ -183,13 +213,34 @@ class TermExtractorAgent:
         ])
 
         parsed = json.loads(raw)
-
-        # The model may return {"terms": [...]} or just [...]
+        extracted_list = []
         if isinstance(parsed, list):
-            return parsed
-        # Unwrap whichever key holds the list
-        for value in parsed.values():
-            if isinstance(value, list):
-                return value
+            extracted_list = parsed
+        elif isinstance(parsed, dict):
+            if "terms" in parsed and isinstance(parsed["terms"], list):
+                extracted_list = parsed["terms"]
+            else:
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        extracted_list = v
+                        break
 
-        return []
+        # Post-process: attach occurrences via fast Python regex search
+        final_terms = []
+        for item in extracted_list:
+            if not isinstance(item, dict):
+                continue
+            term_str = item.get("term", "").strip()
+            if not term_str:
+                continue
+
+            jargon_score = item.get("jargon_score", 5)
+            occurrences = find_occurrences_in_sections(term_str, paper_sections)
+
+            final_terms.append({
+                "term": term_str,
+                "jargon_score": jargon_score,
+                "occurrences": occurrences,
+            })
+
+        return final_terms
