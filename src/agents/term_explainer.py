@@ -9,16 +9,17 @@ paper JSON. For each term it produces:
 
 Uses Groq LLM with the paper's own sentences as grounding context.
 Includes batching (batch_size=3), max_tokens=4096 allocation, automatic model fallback,
-and retry logic to prevent Groq API rate limits and JSON validation truncation errors.
+and full monitoring logging for token usage, latency, inputs, outputs, and errors.
 """
 
 import json
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from groq import Groq
 from dotenv import load_dotenv
+from src.monitoring.logger import monitor_logger
 
 load_dotenv()
 
@@ -79,8 +80,8 @@ class TermExplainerAgent:
         self,
         messages: List[Dict[str, str]],
         max_retries: int = 4,
-    ) -> str:
-        """Helper to call Groq with exponential backoff and automatic model fallback."""
+    ) -> Tuple[str, Dict[str, int]]:
+        """Helper to call Groq with exponential backoff, automatic fallback, and token metrics."""
         current_model = self.model
         for attempt in range(max_retries):
             try:
@@ -91,7 +92,12 @@ class TermExplainerAgent:
                     max_tokens=4096,
                     response_format={"type": "json_object"},
                 )
-                return response.choices[0].message.content
+                usage = {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
+                    "total_tokens": getattr(response.usage, "total_tokens", 0) if response.usage else 0,
+                }
+                return response.choices[0].message.content, usage
             except Exception as e:
                 err_str = str(e).lower()
                 is_rate_limit_or_json_error = any(
@@ -131,8 +137,8 @@ class TermExplainerAgent:
         self,
         terms_batch: List[Dict[str, Any]],
         paper_title: str,
-    ) -> List[Dict[str, Any]]:
-        """Calls LLM to explain a batch of terms in a single request."""
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """Calls LLM to explain a batch of terms in a single request and returns output + token usage."""
         batch_prompt_parts = [f"Paper title: {paper_title}\n"]
         for idx, item in enumerate(terms_batch, start=1):
             t = item.get("term", "")
@@ -145,7 +151,7 @@ class TermExplainerAgent:
         )
         user_message = "\n".join(batch_prompt_parts)
 
-        raw = self._call_llm_with_retry(
+        raw, usage = self._call_llm_with_retry(
             [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
@@ -153,22 +159,27 @@ class TermExplainerAgent:
         )
 
         parsed = json.loads(raw)
+        results_list = []
         if isinstance(parsed, dict):
             if "explained_terms" in parsed and isinstance(
                 parsed["explained_terms"], list
             ):
-                return parsed["explained_terms"]
-            for v in parsed.values():
-                if isinstance(v, list):
-                    return v
+                results_list = parsed["explained_terms"]
+            else:
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        results_list = v
+                        break
         elif isinstance(parsed, list):
-            return parsed
-        return []
+            results_list = parsed
+
+        return results_list, usage
 
     def run(
         self,
         extracted_terms: List[Dict[str, Any]],
         paper_sections: List[Dict[str, Any]],
+        request_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Explains every extracted term using batched requests to avoid Groq rate limits.
@@ -176,61 +187,86 @@ class TermExplainerAgent:
         Args:
             extracted_terms: Output from TermExtractorAgent.run().
             paper_sections: Original parsed paper JSON (for paper title).
+            request_id: Optional correlation ID for monitoring traces.
 
         Returns:
             List of dicts: [{term, jargon_score, context_definition, general_definition, occurrences}, ...]
         """
-        paper_title = "the paper"
-        for sec in paper_sections:
-            if sec.get("title") == "Preamble" and sec.get("content"):
-                paper_title = sec["content"]
-                break
-
-        terms_list = [item for item in extracted_terms if item.get("term")]
-        results_map = {}
-
-        # Process terms in batches
-        total_batches = (len(terms_list) + self.batch_size - 1) // max(
-            1, self.batch_size
-        )
-        for i in range(0, len(terms_list), self.batch_size):
-            batch = terms_list[i : i + self.batch_size]
-            current_batch_num = (i // self.batch_size) + 1
-            print(
-                f"[TermExplainerAgent] Explaining batch {current_batch_num}/{total_batches} ({len(batch)} terms)..."
-            )
-
-            try:
-                explained_batch = self._explain_batch(batch, paper_title)
-                for exp in explained_batch:
-                    t_name = exp.get("term", "")
-                    if t_name:
-                        results_map[t_name.lower()] = exp
-            except Exception as e:
-                print(f"[TermExplainerAgent] Error during batch processing: {e}")
-
-            time.sleep(0.4)
-
-        # Assemble final results list maintaining original order and metadata
+        t0 = time.time()
+        error_msg = None
         final_results = []
-        for item in terms_list:
-            t = item.get("term", "")
-            t_lower = t.lower()
-            exp = results_map.get(t_lower, {})
+        accumulated_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-            final_results.append(
-                {
-                    "term": t,
-                    "jargon_score": item.get("jargon_score", 5),
-                    "context_definition": exp.get(
-                        "context_definition",
-                        "Paper-specific context definition unavailable.",
-                    ),
-                    "general_definition": exp.get(
-                        "general_definition", "General definition unavailable."
-                    ),
-                    "occurrences": item.get("occurrences", []),
-                }
+        try:
+            paper_title = "the paper"
+            for sec in paper_sections:
+                if sec.get("title") == "Preamble" and sec.get("content"):
+                    paper_title = sec["content"]
+                    break
+
+            terms_list = [item for item in extracted_terms if item.get("term")]
+            results_map = {}
+
+            total_batches = (len(terms_list) + self.batch_size - 1) // max(
+                1, self.batch_size
+            )
+            for i in range(0, len(terms_list), self.batch_size):
+                batch = terms_list[i : i + self.batch_size]
+                current_batch_num = (i // self.batch_size) + 1
+                print(
+                    f"[TermExplainerAgent] Explaining batch {current_batch_num}/{total_batches} ({len(batch)} terms)..."
+                )
+
+                try:
+                    explained_batch, usage = self._explain_batch(batch, paper_title)
+                    accumulated_tokens["prompt_tokens"] += usage.get("prompt_tokens", 0)
+                    accumulated_tokens["completion_tokens"] += usage.get("completion_tokens", 0)
+                    accumulated_tokens["total_tokens"] += usage.get("total_tokens", 0)
+
+                    for exp in explained_batch:
+                        t_name = exp.get("term", "")
+                        if t_name:
+                            results_map[t_name.lower()] = exp
+                except Exception as b_err:
+                    print(f"[TermExplainerAgent] Error during batch processing: {b_err}")
+
+                time.sleep(0.4)
+
+            # Assemble final results list maintaining original order and metadata
+            for item in terms_list:
+                t = item.get("term", "")
+                t_lower = t.lower()
+                exp = results_map.get(t_lower, {})
+
+                final_results.append(
+                    {
+                        "term": t,
+                        "jargon_score": item.get("jargon_score", 5),
+                        "context_definition": exp.get(
+                            "context_definition",
+                            "Paper-specific context definition unavailable.",
+                        ),
+                        "general_definition": exp.get(
+                            "general_definition", "General definition unavailable."
+                        ),
+                        "occurrences": item.get("occurrences", []),
+                    }
+                )
+        except Exception as err:
+            error_msg = str(err)
+            raise err
+        finally:
+            latency_ms = (time.time() - t0) * 1000.0
+            monitor_logger.log(
+                level="ERROR" if error_msg else "INFO",
+                endpoint="TermExplainerAgent.run",
+                agent_invoked="TermExplainerAgent",
+                input_data={"terms_to_explain_count": len(extracted_terms)},
+                output_data={"explained_terms_count": len(final_results)},
+                latency_ms=latency_ms,
+                tokens_used=accumulated_tokens,
+                errors=error_msg,
+                request_id=request_id,
             )
 
         return final_results

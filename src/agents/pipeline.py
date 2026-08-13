@@ -6,25 +6,19 @@ Sequential pipeline:
   1. TermExtractorAgent  — finds domain-specific AI/ML terms in the paper
   2. TermExplainerAgent  — explains each term in context + generally
 
-Monitoring outputs (written to src/outputs/ after each agent completes):
-  extracted_terms_<pdf_name>.json  — raw Agent 1 output
-  explained_terms_<pdf_name>.json  — Agent 2 output (final glossary)
-
-Usage:
-    from agents.pipeline import run_pipeline
-
-    result = run_pipeline(parsed_paper_json, pdf_name="mae")
+Includes monitoring logger trace tracking (request_id, timestamp, latency, tokens, level, errors).
 """
 
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.agents.term_extractor import TermExtractorAgent
 from src.agents.term_explainer import TermExplainerAgent
+from src.monitoring.logger import monitor_logger
 
-# Resolve the outputs directory relative to this file's location:
-# src/agents/../outputs → src/outputs
 _OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 
 
@@ -40,6 +34,7 @@ def _save_monitoring(data: Any, filename: str) -> None:
 def run_pipeline(
     paper_sections: List[Dict[str, Any]],
     pdf_name: Optional[str] = "paper",
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs the full two-agent pipeline on a parsed paper JSON.
@@ -47,13 +42,20 @@ def run_pipeline(
     Args:
         paper_sections: Output of parse_pdf_to_json() — nested section list.
         pdf_name: Stem of the original PDF filename (used for monitoring files).
+        request_id: Unique correlation ID for monitoring traces across sub-agents.
 
     Returns:
         dict with keys:
+          - request_id  (str)
           - paper_title (str)
           - term_count  (int)
           - glossary    (list of explained term dicts)
     """
+    t0 = time.time()
+    req_id = request_id or f"req_{uuid.uuid4().hex[:10]}"
+    error_msg = None
+    glossary = []
+
     # Resolve paper title from the Preamble section
     paper_title = "Unknown Paper"
     for sec in paper_sections:
@@ -61,23 +63,41 @@ def run_pipeline(
             paper_title = sec["content"]
             break
 
-    # --- Agent 1: extract terms ---
-    print(f"[pipeline] Running TermExtractorAgent for '{pdf_name}'...")
-    extractor = TermExtractorAgent()
-    extracted_terms = extractor.run(paper_sections)
+    try:
+        # --- Agent 1: extract terms ---
+        print(f"[pipeline] [{req_id}] Running TermExtractorAgent for '{pdf_name}'...")
+        extractor = TermExtractorAgent()
+        extracted_terms = extractor.run(paper_sections, request_id=req_id)
 
-    # Monitoring: save Agent 1 raw output
-    _save_monitoring(extracted_terms, f"extracted_terms_{pdf_name}.json")
+        # Save Agent 1 raw output
+        _save_monitoring(extracted_terms, f"extracted_terms_{pdf_name}.json")
 
-    # --- Agent 2: explain terms ---
-    print(f"[pipeline] Running TermExplainerAgent for '{pdf_name}' ({len(extracted_terms)} terms)...")
-    explainer = TermExplainerAgent()
-    glossary = explainer.run(extracted_terms, paper_sections)
+        # --- Agent 2: explain terms ---
+        print(f"[pipeline] [{req_id}] Running TermExplainerAgent for '{pdf_name}' ({len(extracted_terms)} terms)...")
+        explainer = TermExplainerAgent()
+        glossary = explainer.run(extracted_terms, paper_sections, request_id=req_id)
 
-    # Monitoring: save Agent 2 final output
-    _save_monitoring(glossary, f"explained_terms_{pdf_name}.json")
+        # Save Agent 2 final output
+        _save_monitoring(glossary, f"explained_terms_{pdf_name}.json")
+
+    except Exception as err:
+        error_msg = str(err)
+        raise err
+    finally:
+        latency_ms = (time.time() - t0) * 1000.0
+        monitor_logger.log(
+            level="ERROR" if error_msg else "INFO",
+            endpoint="run_pipeline",
+            agent_invoked="PipelineOrchestrator",
+            input_data={"pdf_name": pdf_name, "section_count": len(paper_sections)},
+            output_data={"paper_title": paper_title, "term_count": len(glossary)},
+            latency_ms=latency_ms,
+            errors=error_msg,
+            request_id=req_id,
+        )
 
     return {
+        "request_id": req_id,
         "paper_title": paper_title,
         "term_count": len(glossary),
         "glossary": glossary,

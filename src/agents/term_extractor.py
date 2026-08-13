@@ -5,16 +5,18 @@ Agent 1 — AI/ML Term Extractor.
 Extracts domain-specific AI/ML terms from a research paper using a lightweight,
 token-optimized summary input. Sentences containing occurrences are matched
 directly in Python to eliminate completion token bloat and prevent Groq API rate limits.
+Includes full monitoring logging for token usage, latency, inputs, outputs, and errors.
 """
 
 import json
 import os
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from groq import Groq
 from dotenv import load_dotenv
+from src.monitoring.logger import monitor_logger
 
 load_dotenv()
 
@@ -142,8 +144,8 @@ class TermExtractorAgent:
         self,
         messages: List[Dict[str, str]],
         max_retries: int = 4,
-    ) -> str:
-        """Helper to call Groq with exponential backoff and automatic model fallback."""
+    ) -> Tuple[str, Dict[str, int]]:
+        """Helper to call Groq with exponential backoff, automatic fallback, and token usage metrics."""
         current_model = self.model
         for attempt in range(max_retries):
             try:
@@ -154,7 +156,12 @@ class TermExtractorAgent:
                     max_tokens=1024,
                     response_format={"type": "json_object"},
                 )
-                return response.choices[0].message.content
+                usage = {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
+                    "total_tokens": getattr(response.usage, "total_tokens", 0) if response.usage else 0,
+                }
+                return response.choices[0].message.content, usage
             except Exception as e:
                 err_str = str(e).lower()
                 is_rate_limit_or_json_error = any(
@@ -189,58 +196,84 @@ class TermExtractorAgent:
                     raise e
         raise RuntimeError("TermExtractorAgent exceeded maximum retry attempts")
 
-    def run(self, paper_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def run(
+        self,
+        paper_sections: List[Dict[str, Any]],
+        request_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Extracts domain-specific terms from the paper and attaches matched occurrences.
 
         Args:
             paper_sections: Structured section list from parse_pdf_to_json().
+            request_id: Optional correlation ID for monitoring traces.
 
         Returns:
             List of dicts: [{"term": str, "jargon_score": int, "occurrences": [str, ...]}, ...]
         """
-        paper_summary = get_paper_summary_for_extraction(paper_sections)
-
-        user_message = (
-            "Here is the research paper summary. "
-            "Extract the top domain-specific AI/ML terms.\n\n"
-            f"{paper_summary}"
-        )
-
-        raw = self._call_llm_with_retry([
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ])
-
-        parsed = json.loads(raw)
-        extracted_list = []
-        if isinstance(parsed, list):
-            extracted_list = parsed
-        elif isinstance(parsed, dict):
-            if "terms" in parsed and isinstance(parsed["terms"], list):
-                extracted_list = parsed["terms"]
-            else:
-                for v in parsed.values():
-                    if isinstance(v, list):
-                        extracted_list = v
-                        break
-
-        # Post-process: attach occurrences via fast Python regex search
+        t0 = time.time()
+        error_msg = None
         final_terms = []
-        for item in extracted_list:
-            if not isinstance(item, dict):
-                continue
-            term_str = item.get("term", "").strip()
-            if not term_str:
-                continue
+        tokens_used = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-            jargon_score = item.get("jargon_score", 5)
-            occurrences = find_occurrences_in_sections(term_str, paper_sections)
+        try:
+            paper_summary = get_paper_summary_for_extraction(paper_sections)
 
-            final_terms.append({
-                "term": term_str,
-                "jargon_score": jargon_score,
-                "occurrences": occurrences,
-            })
+            user_message = (
+                "Here is the research paper summary. "
+                "Extract the top domain-specific AI/ML terms.\n\n"
+                f"{paper_summary}"
+            )
+
+            raw, usage = self._call_llm_with_retry([
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ])
+            tokens_used = usage
+
+            parsed = json.loads(raw)
+            extracted_list = []
+            if isinstance(parsed, list):
+                extracted_list = parsed
+            elif isinstance(parsed, dict):
+                if "terms" in parsed and isinstance(parsed["terms"], list):
+                    extracted_list = parsed["terms"]
+                else:
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            extracted_list = v
+                            break
+
+            for item in extracted_list:
+                if not isinstance(item, dict):
+                    continue
+                term_str = item.get("term", "").strip()
+                if not term_str:
+                    continue
+
+                jargon_score = item.get("jargon_score", 5)
+                occurrences = find_occurrences_in_sections(term_str, paper_sections)
+
+                final_terms.append({
+                    "term": term_str,
+                    "jargon_score": jargon_score,
+                    "occurrences": occurrences,
+                })
+        except Exception as err:
+            error_msg = str(err)
+            raise err
+        finally:
+            latency_ms = (time.time() - t0) * 1000.0
+            monitor_logger.log(
+                level="ERROR" if error_msg else "INFO",
+                endpoint="TermExtractorAgent.run",
+                agent_invoked="TermExtractorAgent",
+                input_data={"section_count": len(paper_sections)},
+                output_data={"extracted_terms_count": len(final_terms)},
+                latency_ms=latency_ms,
+                tokens_used=tokens_used,
+                errors=error_msg,
+                request_id=request_id,
+            )
 
         return final_terms

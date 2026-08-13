@@ -1,0 +1,1 @@
+{"request_id": "req_b99fafb1d3", "timestamp": "2026-08-13T06:14:18.305526+00:00", "level": "INFO", "endpoint": "TermExtractorAgent.run", "agent_invoked": "TermExtractorAgent", "input": {"section_count": 15}, "output": {"extracted_terms_count": 13}, "latency_ms": 751.71, "tokens_used": {"prompt_tokens": 1728, "completion_tokens": 313, "total_tokens": 2041}, "errors": null}
