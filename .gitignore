@@ -12,7 +12,9 @@ wheels/
 # Runtime data — not for version control
 src/data/
 src/outputs/
+src/monitoring/logs/
 *.db
+*.jsonl
 
 # Secrets
 .env
