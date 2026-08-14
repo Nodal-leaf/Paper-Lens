@@ -280,23 +280,6 @@ def get_css() -> str:
     .term-glow {{
         animation: termGlow 1.6s ease;
     }}
-    </style>
-    <script>
-    function navigateToTerm(slug) {{
-        // 1. Click the second Streamlit tab (AI/ML Glossary)
-        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-        if (tabs.length >= 2) tabs[1].click();
-        // 2. After a short wait for the tab content to become visible, scroll to anchor
-        setTimeout(function() {{
-            var el = window.parent.document.getElementById('term-' + slug);
-            if (el) {{
-                el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-                el.classList.add('term-glow');
-                setTimeout(function() {{ el.classList.remove('term-glow'); }}, 1700);
-            }}
-        }}, 350);
-    }}
-    </script>
 
     /* Top Navigation Bar */
     .top-nav {{
@@ -511,6 +494,20 @@ def get_css() -> str:
         max-width: 1240px !important;
     }}
     </style>
+    <script>
+    function navigateToTerm(slug) {{
+        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        if (tabs.length >= 2) tabs[1].click();
+        setTimeout(function() {{
+            var el = window.parent.document.getElementById('term-' + slug);
+            if (el) {{
+                el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                el.classList.add('term-glow');
+                setTimeout(function() {{ el.classList.remove('term-glow'); }}, 1700);
+            }}
+        }}, 350);
+    }}
+    </script>
     """
 
 
