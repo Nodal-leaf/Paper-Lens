@@ -589,6 +589,13 @@ if process_btn:
         try:
             if PIPELINE_AVAILABLE:
                 parsed_sections = parse_pdf_to_json(temp_pdf_path)
+
+                # Persist raw parser output
+                _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                parsed_out_path = _OUTPUTS_DIR / f"parsed_{temp_pdf_path.stem}.json"
+                with open(parsed_out_path, "w", encoding="utf-8") as _f:
+                    json.dump(parsed_sections, _f, indent=2, ensure_ascii=False)
+
                 status_text.markdown("🧠 **Step 2/3: Agent 1 — Scanning domain terms & jargon scores...**")
                 progress_bar.progress(55)
                 time.sleep(0.5)
@@ -610,6 +617,13 @@ if process_btn:
             else:
                 st.warning("LLM Pipeline dependencies unavailable. Loading parsed structured view.")
                 parsed_sections = parse_pdf_to_json(temp_pdf_path)
+
+                # Persist raw parser output
+                _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                parsed_out_path = _OUTPUTS_DIR / f"parsed_{temp_pdf_path.stem}.json"
+                with open(parsed_out_path, "w", encoding="utf-8") as _f:
+                    json.dump(parsed_sections, _f, indent=2, ensure_ascii=False)
+
                 st.session_state.paper_title = temp_pdf_path.stem
                 st.session_state.parsed_data = parsed_sections
                 st.session_state.glossary_data = []
