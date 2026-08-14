@@ -734,26 +734,19 @@ with tab1:
             else '<div class="sec-no-content">No text content — section is a heading only.</div>'
         )
 
-        children_html = ""
-        # We collect child HTML via a placeholder; children are rendered below
-        # using Streamlit calls so they inherit session state, but for pure layout
-        # we render them as nested st.markdown blocks inside the expander.
-
         expander_label = f"{num + '. ' if num else ''}{title}"
         with st.expander(expander_label, expanded=(level == 0 and bool(search_query))):
-            st.markdown(
-                f"""
-                <div class="sec-card sec-card-{depth_cls}">
-                    <div class="sec-title sec-title-{depth_cls}">
-                        {num_badge}
-                        <span>{html.escape(title)}</span>
-                        {page_badge}
-                    </div>
-                    {body_block}
-                </div>
-                """,
-                unsafe_allow_html=True,
+            card_html = (
+                f'<div class="sec-card sec-card-{depth_cls}">'
+                f'<div class="sec-title sec-title-{depth_cls}">'
+                f'{num_badge}'
+                f'<span>{html.escape(title)}</span>'
+                f'{page_badge}'
+                f'</div>'
+                f'{body_block}'
+                f'</div>'
             )
+            st.markdown(card_html, unsafe_allow_html=True)
             if subsections:
                 for sub in subsections:
                     render_section(sub, level=level + 1)
