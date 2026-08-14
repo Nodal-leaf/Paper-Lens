@@ -252,6 +252,17 @@ def get_css() -> str:
         margin-top: 10px;
     }}
 
+    /* ── Jargon Highlight Pills ───────────────────── */
+    .jargon-pill {{
+        background: rgba(99, 102, 241, 0.18);
+        color: #A5B4FC;
+        border: 1px solid rgba(99, 102, 241, 0.35);
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-weight: 600;
+        font-size: 0.87em;
+    }}
+
     /* Top Navigation Bar */
     .top-nav {{
         display: flex;
@@ -695,15 +706,38 @@ with tab1:
         text = _re.sub(r'[ \t]{2,}', ' ', text)
         return text.strip()
 
-    def _paragraphs_html(content: str) -> str:
-        """Clean text and wrap in <p> tags, safely html-escaped."""
+    def _paragraphs_html(content: str, terms: list = None) -> str:
+        """Clean text, optionally highlight jargon terms, wrap in <p> tags."""
         cleaned = _clean_text(content)
         if not cleaned:
             return ""
-        paras = [p.strip() for p in cleaned.split('\n\n') if p.strip()]
-        return ''.join(f'<p>{html.escape(p)}</p>' for p in paras)
 
-    def render_section(sec: dict, level: int = 0):
+        # Build a single combined regex for all glossary terms (longest-first
+        # so multi-word terms match before their short sub-strings).
+        pattern = None
+        if terms:
+            sorted_terms = sorted(terms, key=lambda t: len(t.get('term', '')), reverse=True)
+            pattern = _re.compile(
+                '|'.join(_re.escape(t['term']) for t in sorted_terms),
+                _re.IGNORECASE,
+            )
+
+        paras = [p.strip() for p in cleaned.split('\n\n') if p.strip()]
+        parts = []
+        for para in paras:
+            if pattern:
+                buf, last = [], 0
+                for m in pattern.finditer(para):
+                    buf.append(html.escape(para[last:m.start()]))
+                    buf.append(f'<span class="jargon-pill">{html.escape(m.group(0))}</span>')
+                    last = m.end()
+                buf.append(html.escape(para[last:]))
+                parts.append(f"<p>{''.join(buf)}</p>")
+            else:
+                parts.append(f'<p>{html.escape(para)}</p>')
+        return ''.join(parts)
+
+    def render_section(sec: dict, level: int = 0, terms: list = None):
         title   = sec.get("title", "Untitled Section")
         num     = sec.get("number")
         page    = sec.get("page_number")
@@ -727,7 +761,7 @@ with tab1:
 
         num_badge  = f'<span class="sec-num">{num}</span>' if num else ""
         page_badge = f'<span class="sec-page">p.{page}</span>' if page else ""
-        body_html  = _paragraphs_html(content)
+        body_html  = _paragraphs_html(content, terms)
         body_block = (
             f'<div class="sec-divider"></div><div class="sec-body">{body_html}</div>'
             if body_html
@@ -749,12 +783,14 @@ with tab1:
             st.markdown(card_html, unsafe_allow_html=True)
             if subsections:
                 for sub in subsections:
-                    render_section(sub, level=level + 1)
+                    render_section(sub, level=level + 1, terms=terms)
+
+    glossary_terms = st.session_state.glossary_data or []
 
     sections = st.session_state.parsed_data or []
     if sections:
         for sec in sections:
-            render_section(sec)
+            render_section(sec, terms=glossary_terms)
     else:
         st.info("No section data available.")
 
