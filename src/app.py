@@ -13,6 +13,7 @@ Features:
 """
 
 import base64
+import html
 import json
 import os
 import sys
@@ -695,12 +696,12 @@ with tab1:
         return text.strip()
 
     def _paragraphs_html(content: str) -> str:
-        """Convert cleaned text into <p> tagged HTML paragraphs."""
+        """Convert cleaned text into <p> tagged HTML paragraphs, safely escaped."""
         cleaned = _clean_text(content)
         if not cleaned:
             return ""
         paras = [p.strip() for p in cleaned.split("\n\n") if p.strip()]
-        return "".join(f"<p>{p}</p>" for p in paras)
+        return "".join(f"<p>{html.escape(p)}</p>" for p in paras)
 
     def render_section(sec: dict, level: int = 0):
         title   = sec.get("title", "Untitled Section")
@@ -745,7 +746,7 @@ with tab1:
                 <div class="sec-card sec-card-{depth_cls}">
                     <div class="sec-title sec-title-{depth_cls}">
                         {num_badge}
-                        <span>{title}</span>
+                        <span>{html.escape(title)}</span>
                         {page_badge}
                     </div>
                     {body_block}
