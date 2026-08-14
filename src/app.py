@@ -252,6 +252,52 @@ def get_css() -> str:
         margin-top: 10px;
     }}
 
+    /* ── Jargon Highlight Pills (section body) ───────── */
+    .jargon-pill {{
+        display: inline;
+        background: rgba(99, 102, 241, 0.15);
+        color: #818CF8;
+        border: 1px solid rgba(99, 102, 241, 0.35);
+        border-radius: 4px;
+        padding: 1px 5px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.88em;
+        transition: background 0.18s ease, box-shadow 0.18s ease;
+        text-decoration: none;
+    }}
+    .jargon-pill:hover {{
+        background: rgba(99, 102, 241, 0.30);
+        border-color: rgba(99, 102, 241, 0.65);
+        box-shadow: 0 0 8px rgba(99, 102, 241, 0.35);
+    }}
+    /* Pulse glow when jumped-to */
+    @keyframes termGlow {{
+        0%   {{ box-shadow: 0 0 0px rgba(99,102,241,0); }}
+        40%  {{ box-shadow: 0 0 22px rgba(99,102,241,0.7); }}
+        100% {{ box-shadow: 0 0 0px rgba(99,102,241,0); }}
+    }}
+    .term-glow {{
+        animation: termGlow 1.6s ease;
+    }}
+    </style>
+    <script>
+    function navigateToTerm(slug) {{
+        // 1. Click the second Streamlit tab (AI/ML Glossary)
+        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        if (tabs.length >= 2) tabs[1].click();
+        // 2. After a short wait for the tab content to become visible, scroll to anchor
+        setTimeout(function() {{
+            var el = window.parent.document.getElementById('term-' + slug);
+            if (el) {{
+                el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                el.classList.add('term-glow');
+                setTimeout(function() {{ el.classList.remove('term-glow'); }}, 1700);
+            }}
+        }}, 350);
+    }}
+    </script>
+
     /* Top Navigation Bar */
     .top-nav {{
         display: flex;
@@ -695,15 +741,55 @@ with tab1:
         text = _re.sub(r'[ \t]{2,}', ' ', text)
         return text.strip()
 
-    def _paragraphs_html(content: str) -> str:
-        """Convert cleaned text into <p> tagged HTML paragraphs, safely escaped."""
+    def _slugify(text: str) -> str:
+        """Create a URL/CSS-safe id from a term name."""
+        return _re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+
+    def _render_body(content: str, terms: list) -> str:
+        """Clean text, highlight jargon terms, and wrap in <p> tags.
+
+        Text outside of matched terms is html.escape()d to prevent injection.
+        Matched term spans are kept as raw HTML.
+        """
         cleaned = _clean_text(content)
         if not cleaned:
             return ""
-        paras = [p.strip() for p in cleaned.split("\n\n") if p.strip()]
-        return "".join(f"<p>{html.escape(p)}</p>" for p in paras)
 
-    def render_section(sec: dict, level: int = 0):
+        if terms:
+            # Build combined regex — longest terms first so 'Masked Autoencoders (MAE)'
+            # is matched before bare 'MAE'.
+            sorted_terms = sorted(terms, key=lambda t: len(t.get('term', '')), reverse=True)
+            term_slug = {t['term'].lower(): _slugify(t['term']) for t in sorted_terms}
+            pattern = _re.compile(
+                '|'.join(_re.escape(t['term']) for t in sorted_terms),
+                _re.IGNORECASE,
+            )
+        else:
+            pattern = None
+            term_slug = {}
+
+        paras = [p.strip() for p in cleaned.split('\n\n') if p.strip()]
+        parts = []
+        for para in paras:
+            if pattern:
+                buf = []
+                last = 0
+                for m in pattern.finditer(para):
+                    buf.append(html.escape(para[last:m.start()]))
+                    slug = term_slug.get(m.group(0).lower(), _slugify(m.group(0)))
+                    buf.append(
+                        f'<span class="jargon-pill" '
+                        f'onclick="navigateToTerm(\'{slug}\')"'
+                        f'>{html.escape(m.group(0))}</span>'
+                    )
+                    last = m.end()
+                buf.append(html.escape(para[last:]))
+                parts.append(f"<p>{''.join(buf)}</p>")
+            else:
+                parts.append(f'<p>{html.escape(para)}</p>')
+        return ''.join(parts)
+
+    def render_section(sec: dict, level: int = 0, terms: list = None):
         title   = sec.get("title", "Untitled Section")
         num     = sec.get("number")
         page    = sec.get("page_number")
@@ -727,7 +813,7 @@ with tab1:
 
         num_badge  = f'<span class="sec-num">{num}</span>' if num else ""
         page_badge = f'<span class="sec-page">p.{page}</span>' if page else ""
-        body_html  = _paragraphs_html(content)
+        body_html  = _render_body(content, terms or [])
         body_block = (
             f'<div class="sec-divider"></div><div class="sec-body">{body_html}</div>'
             if body_html
@@ -749,12 +835,14 @@ with tab1:
             st.markdown(card_html, unsafe_allow_html=True)
             if subsections:
                 for sub in subsections:
-                    render_section(sub, level=level + 1)
+                    render_section(sub, level=level + 1, terms=terms)
+
+    glossary_terms = st.session_state.glossary_data or []
 
     sections = st.session_state.parsed_data or []
     if sections:
         for sec in sections:
-            render_section(sec)
+            render_section(sec, terms=glossary_terms)
     else:
         st.info("No section data available.")
 
@@ -808,8 +896,14 @@ with tab2:
                 continue
 
             score_class = "score-high" if score >= 8 else ("score-mid" if score >= 5 else "score-low")
+            term_slug = _re.sub(r'[^a-z0-9]+', '-', term.lower()).strip('-')
 
             with st.container():
+                # Invisible anchor so navigateToTerm() can scroll here
+                st.markdown(
+                    f'<div id="term-{term_slug}" style="height:0;overflow:hidden;"></div>',
+                    unsafe_allow_html=True,
+                )
                 t_col1, t_col2 = st.columns([8, 3])
                 with t_col1:
                     st.markdown(
