@@ -446,8 +446,6 @@ st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 # ------------------------------------------------------------------------------
 # 5. HERO / UPLOAD CARD SECTION
 # ------------------------------------------------------------------------------
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
 hero_col1, hero_col2 = st.columns([7, 5])
 
 with hero_col1:
@@ -484,9 +482,6 @@ uploaded_file = st.file_uploader(
 )
 
 process_btn = st.button("✨ Analyze Research Paper", key="process_pdf_btn")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
 
 # ------------------------------------------------------------------------------
 # 6. PIPELINE EXECUTION & REAL-TIME PROGRESS
@@ -571,8 +566,6 @@ tab1, tab2 = st.tabs([
 # TAB 1: SECTIONS TREE WITH LIVE SEARCH FILTER
 # ------------------------------------------------------------------------------
 with tab1:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    
     search_query = st.text_input(
         "Search Section",
         placeholder="🔍 Type keywords to filter section titles and content (e.g. 'Encoder', 'Loss', 'Masking')...",
@@ -626,20 +619,29 @@ with tab1:
     else:
         st.info("No section data available.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
 # ------------------------------------------------------------------------------
 # TAB 2: AI/ML GLOSSARY WITH COPY FUNCTIONALITY
 # ------------------------------------------------------------------------------
 with tab2:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
     glossary = st.session_state.glossary_data or []
 
     if not glossary:
         st.info("No extracted terms available. Run the agentic pipeline on a PDF to generate the glossary.")
     else:
+        st.markdown(
+            f"""
+            <div style="margin-bottom: 20px;">
+                <div style="font-size: 0.8rem; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.08em;">
+                    AI/ML Glossary
+                </div>
+                <h2 style="font-size: 1.8rem; margin: 4px 0 0; background: linear-gradient(135deg, #6366F1 0%, #A855F7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                    {st.session_state.paper_title or "Paper Analysis"}
+                </h2>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         g_col1, g_col2 = st.columns([3, 2])
         with g_col1:
             term_search = st.text_input(
@@ -669,8 +671,6 @@ with tab2:
             score_class = "score-high" if score >= 8 else ("score-mid" if score >= 5 else "score-low")
 
             with st.container():
-                st.markdown('<div class="glass-panel">', unsafe_allow_html=True)
-                
                 t_col1, t_col2 = st.columns([8, 3])
                 with t_col1:
                     st.markdown(
@@ -698,13 +698,15 @@ with tab2:
 
                 st.markdown(
                     f"""
-                    <div class="def-box">
+                    <div class="glass-panel">
+                        <div class="def-box">
                         <div class="def-title">🎯 In-Context Paper Definition</div>
                         <div style="font-size: 0.95rem; line-height: 1.55;">{c_def}</div>
-                    </div>
-                    <div class="def-box" style="border-left-color: #A855F7;">
+                        </div>
+                        <div class="def-box" style="border-left-color: #A855F7;">
                         <div class="def-title" style="color: #C084FC;">🌐 General AI/ML Definition</div>
                         <div style="font-size: 0.95rem; line-height: 1.55;">{g_def}</div>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -714,14 +716,6 @@ with tab2:
                     with st.expander(f"📍 Occurrences in Paper ({len(occurrences)})"):
                         for occ in occurrences:
                             st.markdown(f"> *\"{occ}\"*")
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-
-
 
 # ------------------------------------------------------------------------------
 # 8. SLEEK FOOTER WITH SCALING LINKS
