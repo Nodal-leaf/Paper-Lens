@@ -152,6 +152,105 @@ def get_css() -> str:
         box-shadow: 0 8px 24px rgba(79, 70, 229, 0.12);
     }}
 
+    /* ── Section Tree ─────────────────────────────────── */
+    .sec-card {{
+        border-radius: 14px;
+        padding: 18px 22px;
+        margin-bottom: 10px;
+        border: 1px solid {border_color};
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }}
+    .sec-card:hover {{
+        box-shadow: 0 6px 20px rgba(79, 70, 229, 0.12);
+    }}
+    .sec-card-l0 {{
+        background: rgba(99, 102, 241, 0.07);
+        border-left: 3px solid #6366F1;
+    }}
+    .sec-card-l1 {{
+        background: rgba(168, 85, 247, 0.06);
+        border-left: 3px solid #A855F7;
+        margin-left: 18px;
+    }}
+    .sec-card-l2 {{
+        background: rgba(30, 37, 51, 0.45);
+        border-left: 3px solid rgba(148, 163, 184, 0.4);
+        margin-left: 36px;
+    }}
+    .sec-title {{
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700;
+        font-size: 1.05rem;
+        letter-spacing: -0.01em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 0;
+    }}
+    .sec-title-l0 {{
+        font-size: 1.15rem;
+        background: linear-gradient(135deg, #818CF8 0%, #C084FC 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }}
+    .sec-title-l1 {{
+        color: #C4B5FD;
+    }}
+    .sec-title-l2 {{
+        color: #94A3B8;
+        font-size: 0.95rem;
+        font-weight: 600;
+    }}
+    .sec-num {{
+        font-family: 'Outfit', sans-serif;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(99, 102, 241, 0.18);
+        color: #818CF8;
+        flex-shrink: 0;
+    }}
+    .sec-page {{
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(148, 163, 184, 0.1);
+        color: #64748B;
+        flex-shrink: 0;
+        margin-left: auto;
+    }}
+    .sec-body {{
+        margin-top: 14px;
+        color: #CBD5E1;
+        font-size: 0.92rem;
+        line-height: 1.75;
+        font-family: 'Inter', sans-serif;
+    }}
+    .sec-body p {{
+        margin: 0 0 10px 0;
+    }}
+    .sec-body p:last-child {{
+        margin-bottom: 0;
+    }}
+    .sec-divider {{
+        height: 1px;
+        background: linear-gradient(90deg, rgba(99,102,241,0.3) 0%, transparent 100%);
+        margin: 10px 0 14px;
+    }}
+    .sec-no-content {{
+        color: #475569;
+        font-style: italic;
+        font-size: 0.85rem;
+        margin-top: 10px;
+    }}
+    .sec-children {{
+        margin-top: 10px;
+    }}
+
     /* Top Navigation Bar */
     .top-nav {{
         display: flex;
@@ -558,44 +657,91 @@ with tab1:
         label_visibility="collapsed"
     )
 
+    import re as _re
+
+    def _clean_text(raw: str) -> str:
+        """Fix common PDF extraction artifacts and reflow text into readable paragraphs."""
+        if not raw:
+            return ""
+        # Fix common ligature / encoding artifacts
+        text = raw
+        text = text.replace("\ufb01", "fi").replace("\ufb02", "fl")
+        text = text.replace("\ufb03", "ffi").replace("\ufb04", "ffl")
+        text = text.replace("\u2019", "'").replace("\u2018", "'")
+        text = text.replace("\u201c", '"').replace("\u201d", '"')
+        text = text.replace("\u2013", "\u2013").replace("\u2014", "\u2014")
+        # Fix hyphenated line-breaks (word-\nbreak -> wordbreak)
+        text = _re.sub(r'(\w)-\n(\w)', r'\1\2', text)
+        # Collapse mid-word line breaks that aren't sentence endings
+        text = _re.sub(r'(?<!\.)\n(?![\n\-\d•*])', ' ', text)
+        # Normalise multiple blank lines -> paragraph break sentinel
+        text = _re.sub(r'\n{2,}', '\n\n', text)
+        # Collapse runs of spaces
+        text = _re.sub(r'[ \t]{2,}', ' ', text)
+        return text.strip()
+
+    def _paragraphs_html(content: str) -> str:
+        """Convert cleaned text into <p> tagged HTML paragraphs."""
+        cleaned = _clean_text(content)
+        if not cleaned:
+            return ""
+        paras = [p.strip() for p in cleaned.split("\n\n") if p.strip()]
+        return "".join(f"<p>{p}</p>" for p in paras)
+
     def render_section(sec: dict, level: int = 0):
-        title = sec.get("title", "Untitled Section")
-        num = sec.get("number")
-        page = sec.get("page_number")
+        title   = sec.get("title", "Untitled Section")
+        num     = sec.get("number")
+        page    = sec.get("page_number")
         content = sec.get("content", "")
         subsections = sec.get("subsections", [])
 
-        display_num = f"{num}. " if num else ""
-        header_text = f"{display_num}{title}"
-        if page:
-            header_text += f" (p. {page})"
-
-        # Check search filter
-        matches_filter = True
+        # ── Search filter ──────────────────────────────────────
         if search_query.strip():
             q = search_query.lower().strip()
-            matches_title = q in title.lower() or (num and q in str(num))
+            matches_title   = q in title.lower() or (num and q in str(num))
             matches_content = q in content.lower()
-            matches_sub = any(
+            matches_sub     = any(
                 q in sub.get("title", "").lower() or q in sub.get("content", "").lower()
                 for sub in subsections
             )
-            matches_filter = matches_title or matches_content or matches_sub
+            if not (matches_title or matches_content or matches_sub):
+                return
 
-        if not matches_filter:
-            return
+        # ── Depth styling ──────────────────────────────────────
+        depth_cls = "l0" if level == 0 else ("l1" if level == 1 else "l2")
 
-        with st.expander(header_text, expanded=(level == 0 and bool(search_query))):
-            if content:
-                st.markdown(content)
-            else:
-                st.markdown("*No direct text content in section header.*")
+        num_badge  = f'<span class="sec-num">{num}</span>' if num else ""
+        page_badge = f'<span class="sec-page">p.{page}</span>' if page else ""
+        body_html  = _paragraphs_html(content)
+        body_block = (
+            f'<div class="sec-divider"></div><div class="sec-body">{body_html}</div>'
+            if body_html
+            else '<div class="sec-no-content">No text content — section is a heading only.</div>'
+        )
 
+        children_html = ""
+        # We collect child HTML via a placeholder; children are rendered below
+        # using Streamlit calls so they inherit session state, but for pure layout
+        # we render them as nested st.markdown blocks inside the expander.
+
+        expander_label = f"{num + '. ' if num else ''}{title}"
+        with st.expander(expander_label, expanded=(level == 0 and bool(search_query))):
+            st.markdown(
+                f"""
+                <div class="sec-card sec-card-{depth_cls}">
+                    <div class="sec-title sec-title-{depth_cls}">
+                        {num_badge}
+                        <span>{title}</span>
+                        {page_badge}
+                    </div>
+                    {body_block}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             if subsections:
-                st.markdown("<div style='margin-left: 20px; margin-top: 10px;'>", unsafe_allow_html=True)
                 for sub in subsections:
                     render_section(sub, level=level + 1)
-                st.markdown("</div>", unsafe_allow_html=True)
 
     sections = st.session_state.parsed_data or []
     if sections:
