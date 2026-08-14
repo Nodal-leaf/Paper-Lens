@@ -3,8 +3,8 @@ src/app.py - Paper Lens Streamlit Web Application
 
 A premium, dark-mode glass-morphism interface for Paper Lens.
 Features:
-- Dark/Light Theme toggle with glassmorphism CSS (.glass-card, .glass-panel).
-- Top Nav with Logo, API Health Status indicator, and Theme Toggle.
+- Glassmorphism CSS components (.glass-card, .glass-panel).
+- Top Nav with Logo and API Health Status indicator.
 - Hero/Upload Card with simulated real-time progress bar & hover-scaling accent gradient button.
 - Data Tabs:
   1. Sections: Collapsible section tree with real-time search filtering.
@@ -56,8 +56,6 @@ st.set_page_config(
 )
 
 # Initialize Session State
-if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
 if "parsed_data" not in st.session_state:
     st.session_state.parsed_data = None
 if "glossary_data" not in st.session_state:
@@ -82,17 +80,16 @@ def load_logo_base64() -> str:
 LOGO_BASE64 = load_logo_base64()
 
 # ------------------------------------------------------------------------------
-# 2. CUSTOM CSS (Glassmorphism, Typography, Animations, Themes)
+# 2. CUSTOM CSS (Glassmorphism, Typography, Animations)
 # ------------------------------------------------------------------------------
-def get_css(theme: str) -> str:
-    is_dark = theme == "dark"
-    bg_color = "#0B0F17" if is_dark else "#F8FAFC"
-    card_bg = "rgba(22, 27, 38, 0.65)" if is_dark else "rgba(255, 255, 255, 0.85)"
-    panel_bg = "rgba(30, 37, 51, 0.5)" if is_dark else "rgba(241, 245, 249, 0.7)"
-    text_color = "#F3F4F6" if is_dark else "#0F172A"
-    muted_color = "#9CA3AF" if is_dark else "#64748B"
-    border_color = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(0, 0, 0, 0.08)"
-    input_bg = "rgba(15, 23, 42, 0.6)" if is_dark else "rgba(255, 255, 255, 0.9)"
+def get_css() -> str:
+    bg_color = "#0B0F17"
+    card_bg = "rgba(22, 27, 38, 0.65)"
+    panel_bg = "rgba(30, 37, 51, 0.5)"
+    text_color = "#F3F4F6"
+    muted_color = "#9CA3AF"
+    border_color = "rgba(255, 255, 255, 0.08)"
+    input_bg = "rgba(15, 23, 42, 0.6)"
 
     return f"""
     <style>
@@ -113,13 +110,7 @@ def get_css(theme: str) -> str:
 
     .stApp {{
         background: {bg_color} !important;
-        background-image: {
-            "radial-gradient(at 0% 0%, rgba(79, 70, 229, 0.15) 0px, transparent 50%), "
-            "radial-gradient(at 100% 100%, rgba(124, 58, 237, 0.15) 0px, transparent 50%)"
-            if is_dark else
-            "radial-gradient(at 0% 0%, rgba(79, 70, 229, 0.05) 0px, transparent 50%), "
-            "radial-gradient(at 100% 100%, rgba(124, 58, 237, 0.05) 0px, transparent 50%)"
-        } !important;
+        background-image: radial-gradient(at 0% 0%, rgba(79, 70, 229, 0.15) 0px, transparent 50%), radial-gradient(at 100% 100%, rgba(124, 58, 237, 0.15) 0px, transparent 50%) !important;
         background-attachment: fixed !important;
     }}
 
@@ -138,7 +129,7 @@ def get_css(theme: str) -> str:
         border: 1px solid {border_color};
         border-radius: 20px;
         padding: 32px;
-        box-shadow: 0 20px 50px rgba(0, 0, 0, {0.4 if is_dark else 0.06});
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
         transition: transform 0.3s ease, box-shadow 0.3s ease;
     }}
 
@@ -379,7 +370,7 @@ def get_css(theme: str) -> str:
 
 
 
-st.markdown(get_css(st.session_state.theme), unsafe_allow_html=True)
+st.markdown(get_css(), unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------------------
@@ -402,7 +393,7 @@ def check_api_health() -> bool:
 api_status = check_api_health()
 status_label = "🟢 API Connected" if api_status else "🟡 Pipeline Mode Ready"
 
-nav_col1, nav_col2, nav_col3 = st.columns([6, 3, 2])
+nav_col1, nav_col2 = st.columns([7, 4])
 
 with nav_col1:
     logo_html = f'<img src="{LOGO_BASE64}" height="40" style="vertical-align: middle;">' if LOGO_BASE64 else '🔍'
@@ -433,12 +424,6 @@ with nav_col2:
         """,
         unsafe_allow_html=True,
     )
-
-with nav_col3:
-    toggle_label = "☀️ Light Mode" if st.session_state.theme == "dark" else "🌙 Dark Mode"
-    if st.button(toggle_label, key="theme_toggle"):
-        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.rerun()
 
 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
