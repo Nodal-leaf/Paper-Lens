@@ -22,6 +22,7 @@ from pathlib import Path
 import urllib.request
 
 import streamlit as st
+import streamlit.components.v1 as _components
 
 # Anchor paths relative to src directory
 _SRC_DIR = Path(__file__).parent
@@ -494,26 +495,57 @@ def get_css() -> str:
         max-width: 1240px !important;
     }}
     </style>
-    <script>
-    function navigateToTerm(slug) {{
-        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-        if (tabs.length >= 2) tabs[1].click();
-        setTimeout(function() {{
-            var el = window.parent.document.getElementById('term-' + slug);
-            if (el) {{
-                el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-                el.classList.add('term-glow');
-                setTimeout(function() {{ el.classList.remove('term-glow'); }}, 1700);
-            }}
-        }}, 350);
-    }}
-    </script>
     """
 
 
 
 
 st.markdown(get_css(), unsafe_allow_html=True)
+
+# Inject working JS via a real iframe (st.markdown scripts are not executed by browsers)
+_components.html("""
+<script>
+(function() {
+    function navigateToTerm(slug) {
+        // Switch to the Glossary tab (second tab button)
+        var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        if (tabs.length >= 2) tabs[1].click();
+        // After the tab reveals its content, scroll to the term anchor
+        setTimeout(function() {
+            var el = window.parent.document.getElementById('term-' + slug);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('term-glow');
+                setTimeout(function() { el.classList.remove('term-glow'); }, 1700);
+            }
+        }, 400);
+    }
+
+    // Expose on parent so future calls work without re-running this iframe
+    window.parent.navigateToTerm = navigateToTerm;
+
+    // Delegated click listener: catches clicks on any .jargon-pill[data-slug]
+    // Remove old listener first to avoid duplicates on Streamlit reruns
+    if (window.parent._jargonListener) {
+        window.parent.document.removeEventListener('click', window.parent._jargonListener, true);
+    }
+    window.parent._jargonListener = function(e) {
+        var el = e.target;
+        // Walk up a couple levels in case the click landed on a child node
+        for (var i = 0; i < 3; i++) {
+            if (!el) break;
+            if (el.classList && el.classList.contains('jargon-pill')) {
+                var slug = el.getAttribute('data-slug');
+                if (slug) { navigateToTerm(slug); }
+                break;
+            }
+            el = el.parentElement;
+        }
+    };
+    window.parent.document.addEventListener('click', window.parent._jargonListener, true);
+}());
+</script>
+""", height=0)
 
 
 # ------------------------------------------------------------------------------
@@ -775,9 +807,8 @@ with tab1:
                     buf.append(html.escape(para[last:m.start()]))
                     slug = term_slug.get(m.group(0).lower(), _slugify(m.group(0)))
                     buf.append(
-                        f'<span class="jargon-pill" '
-                        f'onclick="navigateToTerm(\'{slug}\')"'
-                        f'>{html.escape(m.group(0))}</span>'
+                        f'<span class="jargon-pill" data-slug="{slug}">'
+                        f'{html.escape(m.group(0))}</span>'
                     )
                     last = m.end()
                 buf.append(html.escape(para[last:]))
