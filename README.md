@@ -4,6 +4,17 @@
 
 Paper Lens is an agentic research paper analysis tool that takes any AI/ML research paper PDF, parses it into a structured section hierarchy, and then runs a sequential two-agent LLM pipeline — the first agent scans the full paper text and extracts every domain-specific AI/ML term that matters to *this specific paper's contribution* (not generic ML words like "training" or "loss"), assigning each term a jargon score from 1–10 to indicate how paper-specific it is; the second agent then takes every extracted term and produces two definitions for it: a *context definition* that explains what the term means within the scope and framing of this particular paper, and a *general definition* that explains what it means broadly in the AI/ML field — the entire glossary is persisted to a SQLite database alongside the parsed sections, and monitoring snapshots of each agent's output are saved to disk so you can inspect exactly what the pipeline produced at each stage.
 
+## Screenshots
+
+**Intro — Upload & Hero**
+![Intro](src/assets/intro.png)
+
+**Sections Tree — Structured Paper Hierarchy**
+![Sections](src/assets/sections.png)
+
+**AI/ML Glossary — Term Definitions & Jargon Scores**
+![Glossary](src/assets/glossary.png)
+
 ---
 
 ## CLI — Data Flow
