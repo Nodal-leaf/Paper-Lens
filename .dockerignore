@@ -1,0 +1,27 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Virtual environment (rebuilt inside Docker)
+.venv/
+
+# Runtime data — mounted as volumes in production
+src/data/
+src/outputs/
+src/monitoring/logs/
+
+# Secrets (passed as env vars at runtime)
+.env
+
+# IDE / OS files
+.vscode/
+.idea/
+*.DS_Store

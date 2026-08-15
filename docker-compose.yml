@@ -1,0 +1,23 @@
+services:
+  paper-lens:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paper-lens:latest
+    container_name: paper-lens
+
+    # Pass secrets at runtime — never bake them into the image
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+
+    ports:
+      - "8501:8501"   # Streamlit UI
+      - "8000:8000"   # FastAPI (if running the API server)
+
+    # Persist outputs and database between container restarts
+    volumes:
+      - ./src/data:/app/src/data
+      - ./src/outputs:/app/src/outputs
+      - ./src/monitoring/logs:/app/src/monitoring/logs
+
+    restart: unless-stopped
